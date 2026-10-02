@@ -36,7 +36,10 @@ class TradeLockerBroker(Broker):
             username=settings.tl_email,
             password=settings.tl_password,
             server=settings.tl_server,
-            acc_num=settings.tl_acc_num,
+            # TL_ACC_NUM accepts either the small account number (1, 2, ...) or the account ID
+            # shown in TradeLocker (e.g. 2525183).
+            acc_num=settings.tl_acc_num if 0 < settings.tl_acc_num < 1000 else 0,
+            account_id=settings.tl_acc_num if settings.tl_acc_num >= 1000 else 0,
             log_level="warning",
         )
         self._ids: dict[str, int] = {}
