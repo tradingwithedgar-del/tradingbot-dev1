@@ -237,10 +237,11 @@ def test_symbol_classification():
     from tradingbot.broker.sim import default_contract, is_fx_pair
 
     assert is_fx_pair("EURUSD") and not is_fx_pair("USOIL") and not is_fx_pair("NAS100") and not is_fx_pair("XAUUSD")
-    assert default_contract("XAUUSD") == 100 and default_contract("USOIL") == 1000
+    assert default_contract("XAUUSD") == 100 and default_contract("USOIL") == 1000 and default_contract("XTIUSD") == 1000
     assert default_contract("NVDA") == 1 and default_contract("US30") == 1
 
 
 def test_default_symbols_are_the_requested_markets(monkeypatch):
     monkeypatch.delenv("BOT_SYMBOLS", raising=False)
-    assert Settings().symbols == ["US30", "US500", "NAS100", "XAUUSD", "NVDA", "AAPL", "TSLA", "USOIL"]
+    assert Settings().symbols == ["US30", "US500", "USTECH", "XAUUSD", "NVDA", "AAPL", "TSLA", "XTIUSD",
+                                  "BTCUSD", "ETHUSD", "SOLUSD"]

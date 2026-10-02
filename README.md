@@ -9,7 +9,7 @@ allowed risk. The target is 3× that risk: **5% risk for a 15% gain**.
 
 **New here? Follow [SETUP.md](SETUP.md) for step-by-step install and run instructions.**
 
-Markets traded by default: **US30, US500, NAS100 (US indices), XAUUSD (gold), NVDA, AAPL, TSLA, USOIL**.
+Markets traded by default: **US30, US500, USTECH (US indices), XAUUSD (gold), NVDA, AAPL, TSLA, XTIUSD (WTI oil), BTCUSD, ETHUSD, SOLUSD**.
 Exact names differ per broker; `python -m tradingbot symbols` shows what your account calls them.
 
 ```
@@ -39,7 +39,7 @@ python -m pytest            # 20 tests, about 20s
 | `TL_ACC_NUM` | Which account to use if you have several (optional) |
 | `BOT_MODE` | `demo` (default) or `live` |
 | `ALLOW_LIVE_TRADING` | Must be `YES` before `BOT_MODE=live` will start |
-| `BOT_SYMBOLS` | default `US30,US500,NAS100,XAUUSD,NVDA,AAPL,TSLA,USOIL` (must match TradeLocker names exactly) |
+| `BOT_SYMBOLS` | default `US30,US500,USTECH,XAUUSD,NVDA,AAPL,TSLA,XTIUSD,BTCUSD,ETHUSD,SOLUSD` (must match TradeLocker names exactly) |
 | `BOT_TIMEFRAME` | `5m`, `15m`, `30m`, `1H`, `4H` |
 | `LIVE_APPROVED_STRATEGIES` | Strategies allowed to trade real money on live |
 

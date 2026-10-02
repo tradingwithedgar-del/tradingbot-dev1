@@ -19,9 +19,9 @@ except ImportError:  # pragma: no cover
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("BOT_DATA_DIR", ROOT / "data"))
 
-# US indices, gold, NVIDIA, Apple, Tesla, US oil. Exact names differ per broker:
-# run `python -m tradingbot symbols` to see what your TradeLocker account calls them.
-DEFAULT_SYMBOLS = "US30,US500,NAS100,XAUUSD,NVDA,AAPL,TSLA,USOIL"
+# US indices, gold, NVIDIA, Apple, Tesla, WTI oil and crypto, named as on PlexyTrade's TradeLocker.
+# Full list of PlexyTrade names: SYMBOLS.md. `python -m tradingbot symbols` checks them.
+DEFAULT_SYMBOLS = "US30,US500,USTECH,XAUUSD,NVDA,AAPL,TSLA,XTIUSD,BTCUSD,ETHUSD,SOLUSD"
 
 
 @dataclass

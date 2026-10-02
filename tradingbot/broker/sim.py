@@ -30,7 +30,7 @@ def default_contract(symbol: str) -> float:
         return 100.0
     if s.startswith("XAG"):
         return 5000.0
-    if any(x in s for x in ("OIL", "WTI", "BRENT")):
+    if any(x in s for x in ("OIL", "WTI", "BRENT", "XTI", "XBR")):
         return 1000.0
     if is_fx_pair(s):
         return 100_000.0
