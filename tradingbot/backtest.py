@@ -53,14 +53,15 @@ def synthetic(n: int = 3000, start: float = 1.10, seed: int = 7, freq: str = "15
 
 
 def run_backtest(data: dict[str, pd.DataFrame], settings: Settings | None = None, db_path: str | Path | None = None,
-                 start_balance: float = 10_000.0, seed: int = 1, progress: bool = False) -> Journal:
+                 start_balance: float = 10_000.0, seed: int = 1, progress: bool = False,
+                 specs: dict | None = None) -> Journal:
     settings = settings or Settings()
     settings.mode = "backtest"
     settings.symbols = list(data)
     if db_path is not None:
         settings.db_path = Path(db_path)
     journal = Journal(settings.db_path, mode="backtest")
-    broker = SimBroker(data, start_balance=start_balance, warmup=max(220, min(settings.history_bars, 400)))
+    broker = SimBroker(data, start_balance=start_balance, warmup=max(220, min(settings.history_bars, 400)), specs=specs)
     agent = Agent(settings, broker, journal, rng=random.Random(seed))
     total = broker.length - broker.cursor
     k = 0

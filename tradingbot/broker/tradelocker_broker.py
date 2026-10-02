@@ -16,6 +16,7 @@ import pandas as pd
 
 from ..config import Settings
 from .base import TIMEFRAME_SECONDS, Broker, ClosedInfo, InstrumentSpec, Position, Quote
+from .sim import FX_CODES, is_fx_pair
 
 log = logging.getLogger(__name__)
 
@@ -42,9 +43,23 @@ class TradeLockerBroker(Broker):
         self._specs: dict[str, InstrumentSpec] = {}
         overrides_path = settings.db_path.parent / "instruments.json"
         self._overrides = json.loads(overrides_path.read_text()) if overrides_path.exists() else {}
+        self._spec_fields = {"value_per_point", "qty_step", "min_qty", "max_qty"}
         self._account_ccy = self._detect_account_currency()
 
     # --- helpers ---------------------------------------------------------------
+    def instrument_names(self) -> list[str]:
+        return sorted(str(n) for n in self.api.get_all_instruments()["name"].unique())
+
+    def check_symbols(self, symbols: list[str]) -> dict[str, list[str]]:
+        """Return {missing_symbol: [similar names on this account]} for symbols that don't exist."""
+        names = self.instrument_names()
+        missing = {}
+        for sym in symbols:
+            if sym not in names:
+                key = sym.upper().replace(".", "")[:3]
+                missing[sym] = [n for n in names if key in n.upper().replace(".", "")][:10]
+        return missing
+
     def _iid(self, symbol: str) -> int:
         if symbol not in self._ids:
             self._ids[symbol] = int(self.api.get_instrument_id_from_symbol_name(symbol))
@@ -67,10 +82,19 @@ class TradeLockerBroker(Broker):
             log.exception("could not detect account currency, assuming USD")
         return "USD"
 
+    def _quote_currency(self, symbol: str) -> str:
+        if symbol in self._overrides and "quote_currency" in self._overrides[symbol]:
+            return self._overrides[symbol]["quote_currency"].upper()
+        s = symbol.upper()
+        if is_fx_pair(s) or (s[:3] in {"XAU", "XAG", "XPT", "XPD"} and s[3:6] in FX_CODES):
+            return s[3:6]
+        # US indices, US stocks and US oil are priced in USD. Others: set quote_currency in instruments.json
+        return "USD"
+
     def _quote_to_account_rate(self, symbol: str) -> float:
-        quote_ccy = symbol[3:6].upper() if len(symbol) >= 6 else self._account_ccy
+        quote_ccy = self._quote_currency(symbol)
         acct = self._account_ccy.upper()
-        if quote_ccy == acct or not quote_ccy.isalpha():
+        if quote_ccy == acct:
             return 1.0
         for pair, invert in ((quote_ccy + acct, False), (acct + quote_ccy, True)):
             try:
@@ -81,18 +105,40 @@ class TradeLockerBroker(Broker):
         raise RuntimeError(f"Cannot convert {quote_ccy} to {acct} for {symbol}; add it to data/instruments.json")
 
     # --- Broker API -------------------------------------------------------------
-    def get_bars(self, symbol: str, timeframe: str, count: int) -> pd.DataFrame:
-        secs = TIMEFRAME_SECONDS[timeframe]
-        lookback_days = max(2, int(count * secs / 86400 * 1.6) + 2)  # weekends / gaps
-        raw = self.api.get_price_history(self._iid(symbol), resolution=timeframe, lookback_period=f"{lookback_days}D")
+    def _history_chunk(self, symbol: str, timeframe: str, start_ms: int, end_ms: int) -> pd.DataFrame:
+        raw = self.api.get_price_history(self._iid(symbol), resolution=timeframe,
+                                         start_timestamp=start_ms, end_timestamp=end_ms)
         if raw.empty:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
         df = raw.rename(columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"})
         df.index = pd.to_datetime(df["t"], unit="ms", utc=True)
-        df = df[["open", "high", "low", "close", "volume"]].astype(float).sort_index()
-        # drop the bar that is still forming
+        return df[["open", "high", "low", "close", "volume"]].astype(float)
+
+    def get_bars(self, symbol: str, timeframe: str, count: int, max_days: int = 400) -> pd.DataFrame:
+        """Latest `count` closed bars. Walks back in chunks (the API caps rows per request), so
+        instruments that only trade part of the day, like stocks, still get enough history."""
+        secs = TIMEFRAME_SECONDS[timeframe]
+        try:
+            max_rows = int(self.api.max_price_history_rows())
+        except Exception:
+            max_rows = 5000
+        span_ms = int(max_rows * secs * 1000 * 0.9)
         now = pd.Timestamp.now(tz="UTC")
-        df = df[df.index + pd.Timedelta(seconds=secs) <= now]
+        end_ms = int(now.timestamp() * 1000)
+        oldest_ms = end_ms - max_days * 86_400_000
+        parts: list[pd.DataFrame] = []
+        have = 0
+        while have < count + 1 and end_ms > oldest_ms:
+            start_ms = max(oldest_ms, end_ms - span_ms)
+            chunk = self._history_chunk(symbol, timeframe, start_ms, end_ms)
+            parts.append(chunk)
+            have += len(chunk)
+            end_ms = start_ms
+        if not parts:
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        df = pd.concat(parts).sort_index()
+        df = df[~df.index.duplicated(keep="last")]
+        df = df[df.index + pd.Timedelta(seconds=secs) <= now]  # drop the bar that is still forming
         return df.iloc[-count:]
 
     def get_quote(self, symbol: str) -> Quote:
@@ -118,8 +164,9 @@ class TradeLockerBroker(Broker):
         return out
 
     def spec(self, symbol: str) -> InstrumentSpec:
-        if symbol in self._overrides:
-            return InstrumentSpec(**self._overrides[symbol])
+        ov = self._overrides.get(symbol, {})
+        if "value_per_point" in ov:
+            return InstrumentSpec(**{k: v for k, v in ov.items() if k in self._spec_fields})
         if symbol not in self._specs:
             d = self.api.get_instrument_details(self._iid(symbol))
             lot_size = float(d.get("lotSize") or d.get("contractSize") or 100_000)

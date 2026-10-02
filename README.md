@@ -7,7 +7,13 @@ Its rule for every trade: **"How much am I willing to lose to be wrong?"** It pi
 (where the idea is proven wrong), then sizes the position so that being wrong costs exactly the
 allowed risk. The target is 3× that risk: **5% risk for a 15% gain**.
 
+**New here? Follow [SETUP.md](SETUP.md) for step-by-step install and run instructions.**
+
+Markets traded by default: **US30, US500, NAS100 (US indices), XAUUSD (gold), NVDA, AAPL, TSLA, USOIL**.
+Exact names differ per broker; `python -m tradingbot symbols` shows what your account calls them.
+
 ```
+python -m tradingbot symbols                  # log in and check symbol names
 python -m tradingbot backtest --synthetic     # smoke test with fake data, no account needed
 python -m tradingbot dashboard --db data/backtest.db
 python -m tradingbot run                      # trade the account in .env (demo by default)
@@ -33,7 +39,7 @@ python -m pytest            # 20 tests, about 20s
 | `TL_ACC_NUM` | Which account to use if you have several (optional) |
 | `BOT_MODE` | `demo` (default) or `live` |
 | `ALLOW_LIVE_TRADING` | Must be `YES` before `BOT_MODE=live` will start |
-| `BOT_SYMBOLS` | e.g. `EURUSD,GBPUSD,XAUUSD` (must match TradeLocker symbol names) |
+| `BOT_SYMBOLS` | default `US30,US500,NAS100,XAUUSD,NVDA,AAPL,TSLA,USOIL` (must match TradeLocker names exactly) |
 | `BOT_TIMEFRAME` | `5m`, `15m`, `30m`, `1H`, `4H` |
 | `LIVE_APPROVED_STRATEGIES` | Strategies allowed to trade real money on live |
 
@@ -48,6 +54,8 @@ the `risk` in the dashboard (about 5% of equity). If a symbol is off, set it in 
 {"XAUUSD": {"value_per_point": 100, "qty_step": 0.01, "min_qty": 0.01, "max_qty": 50}}
 ```
 `value_per_point` = account-currency profit for 1.0 lot when price moves by 1.0.
+Non-FX symbols (indices, stocks, oil) are assumed to be priced in USD. If one isn't, add
+`"quote_currency": "EUR"` (for example) to its entry.
 
 ---
 
@@ -160,6 +168,7 @@ weaknesses. `tradingbot/compliance.py` enforces this. The agent:
 
 | Command | What it does |
 |---|---|
+| `python -m tradingbot symbols [--search NAS]` | Log in, list instrument names, check `BOT_SYMBOLS` |
 | `python -m tradingbot run` | Run the agent (polls every 20s, acts on each new closed bar) |
 | `python -m tradingbot status` | Mode, halt state, open trades, latest journal entries |
 | `python -m tradingbot stop` | Creates `data/STOP`: no new real trades (open trades keep their SL/TP) |
@@ -178,6 +187,10 @@ touches both stop and target, so results lean pessimistic.
 * **5% per trade is very aggressive.** Five losses in a row (normal, even for a good 3R strategy) costs
   roughly 20% of the account, even with drawdown scaling. The scaling and the −30% halt are there to keep the account alive. Consider
   starting live at 1–2% and raising it once the demo record justifies it (`RiskConfig.risk_per_trade`).
+* **Stocks and indices gap.** NVDA, AAPL and TSLA only trade during US market hours, and indices and oil
+  close daily and at weekends. A price that opens beyond the stop (overnight news, earnings) fills at the
+  open, so a single loss can be bigger than 5%. The backtester models this. An
+  earnings-day filter or closing stock positions before the bell are good next additions.
 * **At 3R, win rates of 30–45% are good.** Breakeven is 25%. A system targeting 3R will not show the
   70%+ win rates of systems that take small profits. Judge it by **expectancy (R per trade)** and
   **profit factor**, not win rate alone.

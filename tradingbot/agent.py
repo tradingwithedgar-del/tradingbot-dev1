@@ -10,7 +10,7 @@ import pandas as pd
 
 from . import postmortem as pm
 from .analysis.context import MarketContext
-from .broker.base import Broker
+from .broker.base import TIMEFRAME_SECONDS, Broker
 from .compliance import Compliance
 from .config import Settings
 from .journal import Journal
@@ -81,7 +81,13 @@ class Agent:
         peak = self._peak(equity)
         self.j.record_equity(balance, equity, peak, ts=self.now())
 
+        live_clock = not hasattr(self.broker, "now")
+        tf = pd.Timedelta(seconds=TIMEFRAME_SECONDS[self.s.timeframe])
         for symbol in self.s.symbols:
+            if live_clock and symbol in self.last_bar:
+                # The next bar closes at last bar's open + 2 timeframes; don't hammer the API before that.
+                if pd.Timestamp.now(tz="UTC") < pd.Timestamp(self.last_bar[symbol]) + 2 * tf:
+                    continue
             try:
                 df = self.broker.get_bars(symbol, self.s.timeframe, self.s.history_bars)
             except Exception as e:  # pragma: no cover - network

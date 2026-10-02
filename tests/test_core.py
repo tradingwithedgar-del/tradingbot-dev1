@@ -216,3 +216,31 @@ def test_sim_fills_next_open_and_stop_first():
     assert b.open[pid]["entry"] == pytest.approx(df["open"].iloc[5])
     b.step()
     assert b.closed[pid].exit_price == pytest.approx(99.0)  # pessimistic: stop assumed first
+
+
+def test_sim_keeps_symbols_with_different_hours_aligned():
+    full = frame(np.linspace(100, 110, 96))                       # 24h instrument
+    stock = full.between_time("13:30", "19:45")                    # US cash session only
+    stock = stock.assign(close=stock["close"] + 1000, open=stock["open"] + 1000,
+                         high=stock["high"] + 1000, low=stock["low"] + 1000)
+    b = SimBroker({"IDX": full, "STK": stock}, spread_frac=0.0, warmup=10)
+    while b.step():
+        now = b.now()
+        for sym, df in (("IDX", full), ("STK", stock)):
+            bars = b.get_bars(sym, "15m", 5)
+            if len(bars):
+                assert bars.index[-1] <= now   # never sees the future
+                assert bars.index[-1] == df.index[df.index <= now][-1]
+
+
+def test_symbol_classification():
+    from tradingbot.broker.sim import default_contract, is_fx_pair
+
+    assert is_fx_pair("EURUSD") and not is_fx_pair("USOIL") and not is_fx_pair("NAS100") and not is_fx_pair("XAUUSD")
+    assert default_contract("XAUUSD") == 100 and default_contract("USOIL") == 1000
+    assert default_contract("NVDA") == 1 and default_contract("US30") == 1
+
+
+def test_default_symbols_are_the_requested_markets(monkeypatch):
+    monkeypatch.delenv("BOT_SYMBOLS", raising=False)
+    assert Settings().symbols == ["US30", "US500", "NAS100", "XAUUSD", "NVDA", "AAPL", "TSLA", "USOIL"]

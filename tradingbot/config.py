@@ -19,6 +19,10 @@ except ImportError:  # pragma: no cover
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("BOT_DATA_DIR", ROOT / "data"))
 
+# US indices, gold, NVIDIA, Apple, Tesla, US oil. Exact names differ per broker:
+# run `python -m tradingbot symbols` to see what your TradeLocker account calls them.
+DEFAULT_SYMBOLS = "US30,US500,NAS100,XAUUSD,NVDA,AAPL,TSLA,USOIL"
+
 
 @dataclass
 class RiskConfig:
@@ -76,7 +80,7 @@ class LearningConfig:
 class Settings:
     mode: str = field(default_factory=lambda: os.getenv("BOT_MODE", "demo").lower())
     symbols: list[str] = field(
-        default_factory=lambda: [s.strip() for s in os.getenv("BOT_SYMBOLS", "EURUSD,GBPUSD,XAUUSD").split(",") if s.strip()]
+        default_factory=lambda: [s.strip() for s in os.getenv("BOT_SYMBOLS", DEFAULT_SYMBOLS).split(",") if s.strip()]
     )
     timeframe: str = field(default_factory=lambda: os.getenv("BOT_TIMEFRAME", "15m"))
     history_bars: int = 400

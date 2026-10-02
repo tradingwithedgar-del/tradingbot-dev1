@@ -1,5 +1,6 @@
 """Command line entry point.
 
+    python -m tradingbot symbols             # log in and list the exact symbol names on your account
     python -m tradingbot run                 # trade on the account in .env (demo by default)
     python -m tradingbot backtest --synthetic
     python -m tradingbot backtest --csv EURUSD=data/eurusd_15m.csv
@@ -17,6 +18,38 @@ import time
 from .config import Settings
 
 
+def _require_symbols(broker, symbols: list[str]) -> None:
+    missing = broker.check_symbols(symbols)
+    if missing:
+        lines = [f"These symbols don't exist on your TradeLocker account: {', '.join(missing)}"]
+        for sym, similar in missing.items():
+            lines.append(f"  {sym}: similar names -> {', '.join(similar) or '(none found)'}")
+        lines.append("Fix BOT_SYMBOLS in .env (run `python -m tradingbot symbols` to see every name).")
+        raise SystemExit("\n".join(lines))
+
+
+def cmd_symbols(args) -> None:
+    from .broker.tradelocker_broker import TradeLockerBroker
+
+    s = Settings()
+    s.validate()
+    broker = TradeLockerBroker(s)
+    print(f"Logged in to {s.tl_environment} (account currency {broker._account_ccy}).")
+    names = broker.instrument_names()
+    if args.search:
+        names = [n for n in names if args.search.upper() in n.upper()]
+    print(f"{len(names)} instruments" + (f" matching '{args.search}'" if args.search else "") + ":")
+    for i in range(0, len(names), 6):
+        print("  " + "  ".join(f"{n:<14}" for n in names[i:i + 6]))
+    missing = broker.check_symbols(s.symbols)
+    print(f"\nBOT_SYMBOLS = {','.join(s.symbols)}")
+    if missing:
+        for sym, similar in missing.items():
+            print(f"  NOT FOUND: {sym}  (similar: {', '.join(similar) or 'none'})")
+    else:
+        print("  all symbols found - ready to run")
+
+
 def cmd_run(args) -> None:
     from .agent import Agent
     from .broker.tradelocker_broker import TradeLockerBroker
@@ -27,6 +60,7 @@ def cmd_run(args) -> None:
     if s.mode == "backtest":
         raise SystemExit("Use `python -m tradingbot backtest` for backtests.")
     broker = TradeLockerBroker(s)
+    _require_symbols(broker, s.symbols)
     journal = Journal(s.db_path, mode=s.mode)
     agent = Agent(s, broker, journal)
     banner = "LIVE ACCOUNT - REAL MONEY" if s.is_live else "demo account"
@@ -50,7 +84,7 @@ def cmd_backtest(args) -> None:
     from .backtest import load_csv, run_backtest, synthetic
 
     s = Settings()
-    data = {}
+    data, specs = {}, {}
     if args.synthetic:
         data = {"SYNTH_A": synthetic(args.bars, 1.10, seed=11), "SYNTH_B": synthetic(args.bars, 1.30, seed=23)}
     for item in args.csv or []:
@@ -63,12 +97,15 @@ def cmd_backtest(args) -> None:
         broker = TradeLockerBroker(s)
         from .broker.base import TIMEFRAME_SECONDS
 
+        _require_symbols(broker, s.symbols)
         n = int(args.days * 86400 / TIMEFRAME_SECONDS[s.timeframe])
         for sym in s.symbols:
-            data[sym] = broker.get_bars(sym, s.timeframe, n)
+            data[sym] = broker.get_bars(sym, s.timeframe, n, max_days=args.days)
+            specs[sym] = broker.spec(sym)
+            print(f"  {sym}: {len(data[sym])} bars")
     if not data:
         raise SystemExit("Give --synthetic, --csv SYMBOL=path or --tradelocker")
-    j = run_backtest(data, s, db_path=args.db or s.db_path.parent / "backtest.db", seed=args.seed, progress=True)
+    j = run_backtest(data, s, db_path=args.db or s.db_path.parent / "backtest.db", seed=args.seed, progress=True, specs=specs)
     closed = j.trades("status='closed' AND shadow=0 AND mode='backtest'")
     wins = sum(1 for t in closed if (t["r_multiple"] or 0) > 0)
     total_r = sum(t["r_multiple"] or 0 for t in closed)
@@ -121,6 +158,9 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="tradingbot")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("run").set_defaults(fn=cmd_run)
+    sy = sub.add_parser("symbols", help="log in and list instrument names")
+    sy.add_argument("--search", default="")
+    sy.set_defaults(fn=cmd_symbols)
     b = sub.add_parser("backtest")
     b.add_argument("--synthetic", action="store_true")
     b.add_argument("--bars", type=int, default=3000)
