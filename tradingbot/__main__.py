@@ -1,0 +1,148 @@
+"""Command line entry point.
+
+    python -m tradingbot run                 # trade on the account in .env (demo by default)
+    python -m tradingbot backtest --synthetic
+    python -m tradingbot backtest --csv EURUSD=data/eurusd_15m.csv
+    python -m tradingbot backtest --tradelocker --days 60
+    python -m tradingbot dashboard           # http://localhost:8000
+    python -m tradingbot status
+    python -m tradingbot stop | resume
+"""
+from __future__ import annotations
+
+import argparse
+import logging
+import time
+
+from .config import Settings
+
+
+def cmd_run(args) -> None:
+    from .agent import Agent
+    from .broker.tradelocker_broker import TradeLockerBroker
+    from .journal import Journal
+
+    s = Settings()
+    s.validate()
+    if s.mode == "backtest":
+        raise SystemExit("Use `python -m tradingbot backtest` for backtests.")
+    broker = TradeLockerBroker(s)
+    journal = Journal(s.db_path, mode=s.mode)
+    agent = Agent(s, broker, journal)
+    banner = "LIVE ACCOUNT - REAL MONEY" if s.is_live else "demo account"
+    logging.info("Agent started on %s | symbols=%s tf=%s risk=%.1f%% target=%.0fR",
+                 banner, s.symbols, s.timeframe, s.risk.risk_per_trade * 100, s.risk.reward_multiple)
+    journal.event("start", f"agent started ({banner})")
+    while True:
+        try:
+            agent.run_cycle()
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            logging.exception("cycle failed")
+            journal.event("error", f"cycle failed: {e}")
+        if agent.halted:
+            logging.error(agent.halted)
+        time.sleep(s.poll_seconds)
+
+
+def cmd_backtest(args) -> None:
+    from .backtest import load_csv, run_backtest, synthetic
+
+    s = Settings()
+    data = {}
+    if args.synthetic:
+        data = {"SYNTH_A": synthetic(args.bars, 1.10, seed=11), "SYNTH_B": synthetic(args.bars, 1.30, seed=23)}
+    for item in args.csv or []:
+        sym, path = item.split("=", 1)
+        data[sym] = load_csv(path)
+    if args.tradelocker:
+        from .broker.tradelocker_broker import TradeLockerBroker
+
+        s.mode = "demo"
+        broker = TradeLockerBroker(s)
+        from .broker.base import TIMEFRAME_SECONDS
+
+        n = int(args.days * 86400 / TIMEFRAME_SECONDS[s.timeframe])
+        for sym in s.symbols:
+            data[sym] = broker.get_bars(sym, s.timeframe, n)
+    if not data:
+        raise SystemExit("Give --synthetic, --csv SYMBOL=path or --tradelocker")
+    j = run_backtest(data, s, db_path=args.db or s.db_path.parent / "backtest.db", seed=args.seed, progress=True)
+    closed = j.trades("status='closed' AND shadow=0 AND mode='backtest'")
+    wins = sum(1 for t in closed if (t["r_multiple"] or 0) > 0)
+    total_r = sum(t["r_multiple"] or 0 for t in closed)
+    print(f"real trades: {len(closed)}  win rate: {wins / max(1, len(closed)):.1%}  total: {total_r:+.1f}R")
+    print("open the dashboard with: python -m tradingbot dashboard --db data/backtest.db")
+
+
+def cmd_dashboard(args) -> None:
+    import uvicorn
+
+    from .dashboard.app import create_app
+
+    uvicorn.run(create_app(args.db), host=args.host, port=args.port)
+
+
+def cmd_status(args) -> None:
+    from .journal import Journal
+
+    s = Settings()
+    j = Journal(args.db or s.db_path, mode=s.mode)
+    print(f"mode={s.mode} halted={j.get(f'halted:{s.mode}')} stop_file={s.stop_file.exists()}")
+    for t in j.open_trades(shadow=False):
+        print(f"  open #{t['id']} {t['symbol']} {t['side']} {t['strategy']} entry={t['entry']} sl={t['stop']} tp={t['take_profit']}")
+    for e in j.events(10):
+        print(f"  {e['ts']} [{e['kind']}] {e['message']}")
+
+
+def cmd_stop(args) -> None:
+    s = Settings()
+    s.stop_file.parent.mkdir(parents=True, exist_ok=True)
+    s.stop_file.write_text("no new entries\n")
+    print(f"created {s.stop_file}: no new real trades will be opened (open trades keep their SL/TP).")
+
+
+def cmd_resume(args) -> None:
+    from .journal import Journal
+
+    s = Settings()
+    if s.stop_file.exists():
+        s.stop_file.unlink()
+    j = Journal(s.db_path, mode=s.mode)
+    j.set(f"halted:{s.mode}", None)
+    j.set(f"peak:{s.mode}", 0.0)  # drawdown is measured from the current equity again
+    j.event("resume", "human resumed the agent")
+    print("resumed")
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    p = argparse.ArgumentParser(prog="tradingbot")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("run").set_defaults(fn=cmd_run)
+    b = sub.add_parser("backtest")
+    b.add_argument("--synthetic", action="store_true")
+    b.add_argument("--bars", type=int, default=3000)
+    b.add_argument("--csv", action="append", help="SYMBOL=path.csv (repeatable)")
+    b.add_argument("--tradelocker", action="store_true", help="download history from TradeLocker")
+    b.add_argument("--days", type=int, default=60)
+    b.add_argument("--db", default=None)
+    b.add_argument("--seed", type=int, default=1)
+    b.set_defaults(fn=cmd_backtest)
+    d = sub.add_parser("dashboard")
+    d.add_argument("--db", default=None)
+    d.add_argument("--host", default="127.0.0.1")
+    d.add_argument("--port", type=int, default=8000)
+    d.set_defaults(fn=cmd_dashboard)
+    st = sub.add_parser("status")
+    st.add_argument("--db", default=None)
+    st.set_defaults(fn=cmd_status)
+    sub.add_parser("stop").set_defaults(fn=cmd_stop)
+    sub.add_parser("resume").set_defaults(fn=cmd_resume)
+    args = p.parse_args()
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()

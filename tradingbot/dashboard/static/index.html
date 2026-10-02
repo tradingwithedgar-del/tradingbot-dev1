@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Dashboard</title>
+<script src="/plotly.min.js"></script>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b; --good-text: #006300;
+  --div-neg: #e34948; --div-mid: #f0efec; --div-pos: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --good-text: #0ca30c; --div-neg: #e66767; --div-mid: #383835; --div-pos: #3987e5;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  --good-text: #0ca30c; --div-neg: #e66767; --div-mid: #383835; --div-pos: #3987e5;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 16px 24px; }
+h1 { font-size: 18px; margin: 0; }
+h2 { font-size: 15px; margin: 0 0 4px; }
+.sub { color: var(--ink-2); font-size: 13px; margin: 0 0 12px; }
+main { padding: 0 24px 40px; display: grid; gap: 16px; grid-template-columns: repeat(12, 1fr); }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 16px; grid-column: span 12; min-width: 0; }
+.half { grid-column: span 6; }
+@media (max-width: 900px) { .half { grid-column: span 12; } main, header { padding-left: 16px; padding-right: 16px; } }
+.controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+select, button { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--axis); background: var(--surface); color: var(--ink); }
+button { cursor: pointer; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 12px 14px; }
+.tile .k { color: var(--ink-2); font-size: 12px; }
+.tile .v { font-size: 22px; font-weight: 600; margin-top: 2px; }
+.tile .d { color: var(--muted); font-size: 12px; }
+.badge { display: inline-flex; gap: 6px; align-items: center; padding: 4px 10px; border-radius: 999px; font-weight: 600; font-size: 13px; border: 1px solid var(--ring); }
+.badge .dot { width: 10px; height: 10px; border-radius: 50%; }
+.alert { border-left: 4px solid var(--critical); padding: 10px 14px; background: var(--surface); border-radius: 6px; grid-column: span 12; }
+.chart { width: 100%; height: 300px; }
+.chart.tall { height: 380px; }
+.table-wrap { overflow-x: auto; max-height: 520px; overflow-y: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background: var(--surface); }
+tr.click { cursor: pointer; }
+tr.click:hover { background: var(--grid); }
+.win { color: var(--good-text); }
+.loss { color: var(--critical); }
+.muted { color: var(--muted); }
+.tag { display: inline-block; padding: 1px 7px; margin: 1px 2px; border-radius: 4px; background: var(--grid); color: var(--ink-2); font-size: 12px; }
+.events { list-style: none; padding: 0; margin: 0; max-height: 380px; overflow-y: auto; }
+.events li { padding: 6px 0; border-bottom: 1px solid var(--grid); }
+.events .kind { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); margin-right: 6px; }
+.events .ts { color: var(--muted); font-size: 12px; margin-right: 6px; font-variant-numeric: tabular-nums; }
+#detail { display: none; }
+.kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 4px 16px; font-size: 13px; }
+.kv div span { color: var(--ink-2); }
+.empty { color: var(--muted); padding: 24px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Trading agent</h1>
+    <div class="sub" id="ruleline">Loading...</div>
+  </div>
+  <div class="controls">
+    <span id="survival"></span>
+    <label>Account <select id="mode"></select></label>
+    <button id="theme" title="Toggle theme">Theme</button>
+  </div>
+</header>
+<main>
+  <div class="alert" id="halt" style="display:none"></div>
+  <section class="card"><div class="tiles" id="tiles"></div></section>
+
+  <section class="card half"><h2>Equity</h2><p class="sub">Account equity at every bar the agent processed</p><div class="chart" id="equityChart"></div></section>
+  <section class="card half"><h2>Drawdown from peak</h2><p class="sub">Risk scales down as this grows; the agent halts at the configured limit</p><div class="chart" id="ddChart"></div></section>
+
+  <section class="card half"><h2>Result of each real trade (R)</h2><p class="sub">1R = the amount risked. A full win is about +3R</p><div class="chart" id="rChart"></div></section>
+  <section class="card half"><h2>Cumulative R by strategy</h2><p class="sub">Real trades only. Rising line = the strategy is earning its keep</p><div class="chart" id="cumChart"></div></section>
+
+  <section class="card">
+    <h2>Strategies</h2><p class="sub">Shadow = virtual trades the agent tracks without risking money (experiments, filtered setups, setups it couldn't afford)</p>
+    <div class="table-wrap"><table id="stratTable"></table></div>
+  </section>
+
+  <section class="card">
+    <div class="controls" style="justify-content:space-between">
+      <div><h2>Where it works and where it doesn't</h2><p class="sub">Average R per trade by strategy and market condition (blue = making money, red = losing). Number = trades</p></div>
+      <div class="controls">
+        <label>Condition <select id="dim">
+          <option>regime</option><option>session</option><option>structure</option><option>bias</option>
+          <option>volatility</option><option>symbol</option><option>rsi_zone</option><option>confluence</option></select></label>
+        <label>Trades <select id="dimKind"><option value="all">real + shadow</option><option value="real">real</option><option value="shadow">shadow</option></select></label>
+      </div>
+    </div>
+    <div class="chart tall" id="heat"></div>
+  </section>
+
+  <section class="card half"><h2>Why trades lost</h2><p class="sub">Post-mortem tags on losing trades (real + shadow)</p><div class="chart" id="lossTags"></div></section>
+  <section class="card half"><h2>Agent journal</h2><p class="sub">Lessons learned, parameter tuning, experiments and approvals needed</p><ul class="events" id="events"></ul></section>
+
+  <section class="card" id="detail">
+    <div class="controls" style="justify-content:space-between"><h2 id="dTitle"></h2><button id="dClose">Close</button></div>
+    <div class="chart tall" id="dChart"></div>
+    <div class="kv" id="dKv"></div>
+    <div id="dNotes" style="margin-top:10px"></div>
+  </section>
+
+  <section class="card">
+    <div class="controls" style="justify-content:space-between">
+      <div><h2>Trades</h2><p class="sub">Click a trade to replay it on the chart with its entry, stop, target and post-mortem</p></div>
+      <label>Show <select id="kind"><option value="real">real</option><option value="shadow">shadow</option><option value="all">all</option></select></label>
+    </div>
+    <div class="table-wrap"><table id="tradeTable"></table></div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const SERIES = ['--s1','--s2','--s3','--s4','--s5','--s6','--s7','--s8'];
+const colorFor = {};   // entity -> slot, fixed for the session so filters never repaint
+function seriesColor(name) {
+  if (!(name in colorFor)) colorFor[name] = Object.keys(colorFor).length;
+  const slot = colorFor[name];
+  return slot < SERIES.length ? css(SERIES[slot]) : css('--muted');
+}
+const fmtPct = (x, d = 1) => x == null ? '—' : (x * 100).toFixed(d) + '%';
+const fmtR = (x) => x == null ? '—' : (x >= 0 ? '+' : '') + x.toFixed(2) + 'R';
+const fmtNum = (x) => x == null ? '—' : x.toLocaleString(undefined, {maximumFractionDigits: 2});
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function get(url) { const r = await fetch(url); if (!r.ok) throw new Error(url); return r.json(); }
+
+function layout(extra = {}) {
+  return Object.assign({
+    paper_bgcolor: css('--surface'), plot_bgcolor: css('--surface'),
+    font: {family: 'system-ui, -apple-system, Segoe UI, sans-serif', color: css('--ink-2'), size: 12},
+    margin: {l: 56, r: 16, t: 8, b: 40},
+    xaxis: {gridcolor: css('--grid'), linecolor: css('--axis'), zeroline: false},
+    yaxis: {gridcolor: css('--grid'), linecolor: css('--axis'), zerolinecolor: css('--axis')},
+    hoverlabel: {bgcolor: css('--surface'), bordercolor: css('--axis'), font: {color: css('--ink')}},
+    showlegend: false,
+  }, extra);
+}
+const cfg = {displayModeBar: false, responsive: true};
+
+let MODE = null;
+async function init() {
+  const modes = await get('/api/modes');
+  $('mode').innerHTML = modes.map(m => `<option>${m}</option>`).join('') || '<option>demo</option>';
+  MODE = $('mode').value;
+  ['mode','kind','dim','dimKind'].forEach(id => $(id).addEventListener('change', () => { MODE = $('mode').value; refresh(); }));
+  $('dClose').onclick = () => { $('detail').style.display = 'none'; };
+  $('theme').onclick = () => {
+    const root = document.documentElement;
+    const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+    root.dataset.theme = dark ? 'light' : 'dark';
+    refresh();
+  };
+  refresh();
+  setInterval(refresh, 30000);
+}
+
+async function refresh() {
+  const m = encodeURIComponent(MODE);
+  const [sum, eq, strats, trades, heat, pmort, evs] = await Promise.all([
+    get(`/api/summary?mode=${m}`), get(`/api/equity?mode=${m}`), get(`/api/strategies?mode=${m}`),
+    get(`/api/trades?mode=${m}&kind=${$('kind').value}`),
+    get(`/api/breakdown?mode=${m}&by=${$('dim').value}&kind=${$('dimKind').value}`),
+    get(`/api/postmortems?mode=${m}`), get(`/api/events?mode=${m}`),
+  ]);
+  strats.forEach(s => seriesColor(s.name));
+  renderSummary(sum); renderEquity(eq); renderStrategies(strats, trades); renderHeat(heat);
+  renderTags(pmort); renderEvents(evs); renderTrades(trades);
+}
+
+function renderSummary(s) {
+  $('ruleline').textContent = `Risk ${fmtPct(s.risk_per_trade, 0)} per trade for a ${s.reward_multiple}R target (${fmtPct(s.risk_per_trade * s.reward_multiple, 0)}) · ${s.mode} account`;
+  const sv = s.survival;
+  $('survival').innerHTML = `<span class="badge" title="${esc(sv.detail)}"><span class="dot" style="background:var(--${sv.level})"></span>${esc(sv.label)} <span class="muted" style="font-weight:400">${esc(sv.detail)}</span></span>`;
+  $('halt').style.display = s.halted ? 'block' : 'none';
+  $('halt').textContent = s.halted || '';
+  const a = s.all;
+  const tiles = [
+    ['Equity', fmtNum(s.equity), `balance ${fmtNum(s.balance)}`],
+    ['Return', fmtPct(s.return_pct), 'since first record'],
+    ['Drawdown', fmtPct(s.drawdown), `worst ${fmtPct(s.max_drawdown)}`],
+    ['Win rate', fmtPct(a.win_rate, 0), `${a.wins}/${a.trades} real trades`],
+    ['Expectancy', fmtR(a.expectancy_r), `last 30: ${fmtR(s.recent.expectancy_r)}`],
+    ['Profit factor', a.profit_factor == null ? '—' : a.profit_factor.toFixed(2), 'gross win / gross loss'],
+    ['Open', s.open_trades, `${fmtPct(s.open_risk_pct)} of equity at risk`],
+    ['Shadow trades', s.shadow.trades, `${fmtR(s.shadow.expectancy_r)} avg`],
+  ];
+  $('tiles').innerHTML = tiles.map(([k, v, d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join('');
+}
+
+function renderEquity(eq) {
+  if (!eq.length) { $('equityChart').innerHTML = $('ddChart').innerHTML = '<div class="empty">No equity data yet</div>'; return; }
+  const x = eq.map(e => e.ts);
+  Plotly.react('equityChart', [{x, y: eq.map(e => e.equity), type: 'scatter', mode: 'lines', line: {color: css('--s1'), width: 2},
+    hovertemplate: '%{x}<br>Equity %{y:,.2f}<extra></extra>'}], layout({hovermode: 'x'}), cfg);
+  Plotly.react('ddChart', [{x, y: eq.map(e => -e.drawdown * 100), type: 'scatter', mode: 'lines', fill: 'tozeroy',
+    line: {color: css('--s8'), width: 2}, fillcolor: css('--s8') + '33', hovertemplate: '%{x}<br>Drawdown %{y:.1f}%<extra></extra>'}],
+    layout({hovermode: 'x', yaxis: {ticksuffix: '%', gridcolor: css('--grid'), zerolinecolor: css('--axis')}}), cfg);
+}
+
+function renderStrategies(strats, trades) {
+  // R per real trade, oldest first
+  const real = trades.filter(t => !t.shadow && t.status === 'closed').slice().reverse();
+  if (real.length) {
+    Plotly.react('rChart', [{
+      x: real.map(t => '#' + t.id), y: real.map(t => t.r_multiple), type: 'bar',
+      marker: {color: real.map(t => t.r_multiple > 0 ? css('--good') : css('--critical'))},
+      customdata: real.map(t => [t.strategy, t.symbol, t.side, t.outcome]),
+      hovertemplate: '%{x} %{customdata[0]}<br>%{customdata[1]} %{customdata[2]}<br>%{y:+.2f}R (%{customdata[3]})<extra></extra>',
+    }], layout({bargap: 0.25, xaxis: {type: 'category', showticklabels: real.length < 40, gridcolor: css('--grid')}}), cfg);
+  } else $('rChart').innerHTML = '<div class="empty">No closed real trades yet</div>';
+
+  const withCum = strats.filter(s => s.cum_r.length);
+  if (withCum.length) {
+    Plotly.react('cumChart', withCum.map(s => ({x: s.cum_r.map(p => p.ts), y: s.cum_r.map(p => p.r), name: s.name, type: 'scatter',
+      mode: 'lines', line: {color: seriesColor(s.name), width: 2, shape: 'hv'}, hovertemplate: `${s.name}<br>%{x}<br>%{y:+.2f}R<extra></extra>`})),
+      layout({showlegend: true, legend: {orientation: 'h', y: -0.2}, hovermode: 'closest'}), cfg);
+  } else $('cumChart').innerHTML = '<div class="empty">No closed real trades yet</div>';
+
+  const rows = strats.map(s => `<tr>
+      <td><span class="badge" style="padding:1px 8px"><span class="dot" style="background:${seriesColor(s.name)}"></span>${esc(s.name)}</span>
+        ${s.description ? `<div class="muted" style="white-space:normal;max-width:420px">${esc(s.description)}</div>` : ''}</td>
+      <td>${esc(s.stage)}</td>
+      <td>${s.real.trades}</td><td>${fmtPct(s.real.win_rate, 0)}</td><td class="${(s.real.expectancy_r||0) >= 0 ? 'win' : 'loss'}">${fmtR(s.real.expectancy_r)}</td>
+      <td>${s.shadow.trades}</td><td>${fmtR(s.shadow.expectancy_r)}</td>
+      <td>${s.learned_win_rate == null ? '—' : fmtPct(s.learned_win_rate, 0)}</td>
+      <td style="white-space:normal">${s.filters.map(f => `<span class="tag">${esc(f)}</span>`).join('') || '<span class="muted">none</span>'}</td>
+      <td style="white-space:normal">${s.params ? Object.entries(s.params).map(([k, v]) => `<span class="tag">${esc(k)}=${(+v).toFixed(2)}</span>`).join('') : '<span class="muted">default</span>'}
+        ${s.breakeven_at_r ? `<span class="tag">BE at +${s.breakeven_at_r}R</span>` : ''}</td>
+    </tr>`).join('');
+  $('stratTable').innerHTML = `<thead><tr><th>Strategy</th><th>Stage</th><th>Real</th><th>Win %</th><th>Avg R</th>
+    <th>Shadow</th><th>Shadow avg R</th><th>Learned win %</th><th>Blocked conditions</th><th>Tuned params</th></tr></thead><tbody>${rows}</tbody>`;
+}
+
+function renderHeat(cells) {
+  if (!cells.length) { $('heat').innerHTML = '<div class="empty">No closed trades yet</div>'; return; }
+  const ys = [...new Set(cells.map(c => c.strategy))];
+  const xs = [...new Set(cells.map(c => c.value))].sort();
+  const z = ys.map(y => xs.map(x => { const c = cells.find(c => c.strategy === y && c.value === x); return c ? c.expectancy_r : null; }));
+  const n = ys.map(y => xs.map(x => { const c = cells.find(c => c.strategy === y && c.value === x); return c ? c.trades : 0; }));
+  const lim = Math.max(1, ...cells.map(c => Math.abs(c.expectancy_r || 0)));
+  Plotly.react('heat', [{
+    type: 'heatmap', x: xs, y: ys, z, zmin: -lim, zmax: lim, text: n, texttemplate: '%{text}', xgap: 2, ygap: 2,
+    colorscale: [[0, css('--div-neg')], [0.5, css('--div-mid')], [1, css('--div-pos')]],
+    colorbar: {title: {text: 'avg R'}, outlinewidth: 0},
+    hovertemplate: '%{y}<br>%{x}<br>avg %{z:+.2f}R over %{text} trades<extra></extra>',
+  }], layout({margin: {l: 130, r: 16, t: 8, b: 80}, yaxis: {automargin: true}, xaxis: {automargin: true}}), cfg);
+}
+
+function renderTags(p) {
+  if (!p.losses.length) { $('lossTags').innerHTML = '<div class="empty">No losing trades analysed yet</div>'; return; }
+  const items = p.losses.slice().reverse();
+  Plotly.react('lossTags', [{type: 'bar', orientation: 'h', y: items.map(i => i[0].replaceAll('_', ' ')), x: items.map(i => i[1]),
+    marker: {color: css('--s2')}, text: items.map(i => i[1]), textposition: 'outside', hovertemplate: '%{y}: %{x} losses<extra></extra>'}],
+    layout({margin: {l: 150, r: 30, t: 8, b: 30}, yaxis: {automargin: true}}), cfg);
+}
+
+function renderEvents(evs) {
+  const important = evs.filter(e => !['shadow'].includes(e.kind)).slice(0, 120);
+  $('events').innerHTML = important.map(e => `<li><span class="ts">${esc(e.ts.slice(0, 16).replace('T', ' '))}</span>
+    <span class="kind">${esc(e.kind)}</span>${esc(e.message)}</li>`).join('') || '<li class="muted">Nothing yet</li>';
+}
+
+function renderTrades(trades) {
+  const rows = trades.map(t => `<tr class="click" data-id="${t.id}">
+    <td>#${t.id}${t.shadow ? ' <span class="tag">shadow</span>' : ''}</td><td>${esc((t.opened_at||'').slice(0,16).replace('T',' '))}</td>
+    <td>${esc(t.symbol)}</td><td>${esc(t.side)}</td><td>${esc(t.strategy)}</td><td>${esc(t.regime)}</td>
+    <td>${t.status === 'open' ? '<span class="muted">open</span>' : `<span class="${t.r_multiple > 0 ? 'win' : 'loss'}">${fmtR(t.r_multiple)}</span>`}</td>
+    <td>${fmtR(t.mfe_r)}</td><td>${fmtR(-(t.mae_r||0))}</td><td>${t.pnl ? fmtNum(t.pnl) : '—'}</td>
+    <td style="white-space:normal">${(t.tags||[]).map(g => `<span class="tag">${esc(g.replaceAll('_',' '))}</span>`).join('')}</td></tr>`).join('');
+  $('tradeTable').innerHTML = `<thead><tr><th>Trade</th><th>Opened</th><th>Symbol</th><th>Side</th><th>Strategy</th><th>Regime</th>
+    <th>Result</th><th>Best</th><th>Worst</th><th>P&amp;L</th><th>Post-mortem</th></tr></thead><tbody>${rows || '<tr><td colspan="11" class="empty">No trades yet</td></tr>'}</tbody>`;
+  document.querySelectorAll('#tradeTable tr.click').forEach(tr => tr.onclick = () => showTrade(tr.dataset.id));
+}
+
+async function showTrade(id) {
+  const t = await get(`/api/trade/${id}`);
+  $('detail').style.display = 'block';
+  $('dTitle').textContent = `#${t.id} ${t.strategy} · ${t.symbol} ${t.side.toUpperCase()} · ${t.status === 'open' ? 'open' : fmtR(t.r_multiple)}${t.shadow ? ' · shadow' : ''}`;
+  const bars = t.chart || [];
+  const x = bars.map(b => b[0]);
+  const shapes = [], ann = [];
+  const end = t.closed_at || x[x.length - 1];
+  [['entry', t.entry, css('--s1')], ['stop', t.stop, css('--critical')], ['target', t.take_profit, css('--good')]].forEach(([n, y, c]) => {
+    shapes.push({type: 'line', x0: t.opened_at, x1: end, y0: y, y1: y, line: {color: c, width: 2, dash: n === 'entry' ? 'solid' : 'dot'}});
+    ann.push({x: end, y, text: `${n} ${(+y).toPrecision(6)}`, showarrow: false, xanchor: 'left', font: {color: css('--ink-2'), size: 11}});
+  });
+  const traces = [{type: 'candlestick', x, open: bars.map(b => b[1]), high: bars.map(b => b[2]), low: bars.map(b => b[3]), close: bars.map(b => b[4]),
+    increasing: {line: {color: css('--s3'), width: 1}}, decreasing: {line: {color: css('--s8'), width: 1}}, name: 'price'}];
+  if (t.exit_price != null) traces.push({type: 'scatter', mode: 'markers', x: [t.closed_at], y: [t.exit_price], name: 'exit',
+    marker: {size: 12, symbol: 'x', color: css('--ink'), line: {width: 2, color: css('--surface')}}, hovertemplate: 'exit %{y}<extra></extra>'});
+  Plotly.react('dChart', traces, layout({shapes, annotations: ann, xaxis: {rangeslider: {visible: false}, gridcolor: css('--grid')}, margin: {l: 56, r: 110, t: 8, b: 40}}), cfg);
+  const f = t.features || {}, d = t.decision || {}, pm = t.postmortem || {};
+  const kv = {
+    'Reason': t.reason, 'Regime': f.regime, 'Structure': `${f.structure} (${f.structure_seq || ''})`, 'HTF bias': f.bias,
+    'Session': f.session, 'RSI': f.rsi, 'Confluence': f.confluence, 'Risk': t.risk_pct ? fmtPct(t.risk_pct, 2) : 'virtual',
+    'Best excursion': fmtR(t.mfe_r), 'Worst excursion': fmtR(-(t.mae_r || 0)),
+    'Agent decision': `${d.action || ''} · win prob ${d.p != null ? fmtPct(d.p, 0) : '—'} · exp ${fmtR(d.expected_r)}`,
+  };
+  $('dKv').innerHTML = Object.entries(kv).map(([k, v]) => `<div><span>${k}:</span> ${esc(v ?? '—')}</div>`).join('');
+  $('dNotes').innerHTML = `<div><b>Why it took / skipped it:</b> ${(d.why || []).map(esc).join(' · ') || '—'}</div>` +
+    `<div style="margin-top:6px"><b>Post-mortem${pm.final ? '' : ' (still watching price after exit)'}:</b></div>` +
+    ((pm.notes || []).map(n => `<div class="muted">• ${esc(n)}</div>`).join('') || '<div class="muted">—</div>');
+  $('detail').scrollIntoView({behavior: 'smooth'});
+}
+
+init();
+</script>
+</body>
+</html>

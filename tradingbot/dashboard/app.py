@@ -1,0 +1,191 @@
+"""Read-only dashboard API + single-page UI. It only reads the journal; it can't place trades."""
+from __future__ import annotations
+
+from collections import Counter, defaultdict
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+
+from ..config import Settings
+from ..journal import Journal
+from ..learning import EdgeStat
+
+STATIC = Path(__file__).parent / "static"
+DIMENSIONS = ["regime", "session", "structure", "bias", "volatility", "symbol", "rsi_zone", "confluence"]
+
+
+def stats_for(trades: list[dict]) -> dict:
+    rs = [t["r_multiple"] or 0.0 for t in trades]
+    wins = [r for r in rs if r > 0]
+    losses = [r for r in rs if r <= 0]
+    gross_loss = -sum(losses)
+    return {
+        "trades": len(rs),
+        "wins": len(wins),
+        "win_rate": len(wins) / len(rs) if rs else None,
+        "expectancy_r": sum(rs) / len(rs) if rs else None,
+        "total_r": sum(rs),
+        "avg_win_r": sum(wins) / len(wins) if wins else None,
+        "avg_loss_r": sum(losses) / len(losses) if losses else None,
+        "profit_factor": (sum(wins) / gross_loss) if gross_loss > 0 else None,
+        "pnl": sum(t["pnl"] or 0.0 for t in trades),
+    }
+
+
+def survival(st: dict, dd: float, halted: bool) -> dict:
+    exp = st["expectancy_r"]
+    n = st["trades"]
+    if halted or dd >= 0.25:
+        return {"level": "critical", "label": "Termination zone", "detail": "Drawdown limit hit or about to be hit"}
+    if n < 20:
+        return {"level": "warning", "label": "Proving itself", "detail": f"{n}/20 real trades before a verdict"}
+    if exp is not None and exp > 0.3 and dd < 0.10:
+        return {"level": "good", "label": "Thriving", "detail": f"{exp:+.2f}R per trade"}
+    if exp is not None and exp > 0:
+        return {"level": "good", "label": "Surviving", "detail": f"{exp:+.2f}R per trade"}
+    return {"level": "serious", "label": "At risk", "detail": "Negative expectancy over recent trades"}
+
+
+def create_app(db_path: str | Path | None = None) -> FastAPI:
+    settings = Settings()
+    path = Path(db_path) if db_path else settings.db_path
+    if not path.exists():
+        raise SystemExit(f"No journal at {path}. Run the agent or a backtest first.")
+    j = Journal(path)
+    app = FastAPI(title="Trading agent dashboard")
+
+    def closed(mode: str, shadow: int | None = 0) -> list[dict]:
+        if shadow is None:
+            return j.trades("status='closed' AND mode=?", (mode,), order="closed_at")
+        return j.trades("status='closed' AND mode=? AND shadow=?", (mode, shadow), order="closed_at")
+
+    @app.get("/")
+    def index():
+        return FileResponse(STATIC / "index.html")
+
+    @app.get("/plotly.min.js")
+    def plotly_js():
+        # Served from the installed `plotly` Python package so the dashboard works offline.
+        import plotly
+
+        return FileResponse(Path(plotly.__file__).parent / "package_data" / "plotly.min.js", media_type="text/javascript")
+
+    @app.get("/api/modes")
+    def modes():
+        rows = j.conn.execute("SELECT DISTINCT mode FROM trades UNION SELECT DISTINCT mode FROM equity").fetchall()
+        found = [r[0] for r in rows if r[0]]
+        order = ["live", "demo", "backtest"]
+        return sorted(found, key=lambda m: order.index(m) if m in order else 9)
+
+    @app.get("/api/summary")
+    def summary(mode: str):
+        curve = j.equity_curve(mode)
+        last = curve[-1] if curve else {"equity": 0, "balance": 0, "peak": 0, "drawdown": 0}
+        first = curve[0]["equity"] if curve else 0
+        max_dd = max((c["drawdown"] for c in curve), default=0.0)
+        real = closed(mode, 0)
+        st = stats_for(real)
+        recent = stats_for(real[-30:])
+        halted = j.get(f"halted:{mode}")
+        open_real = j.trades("status='open' AND mode=? AND shadow=0", (mode,))
+        return {
+            "mode": mode, "equity": last["equity"], "balance": last["balance"], "peak": last["peak"],
+            "drawdown": last["drawdown"], "max_drawdown": max_dd,
+            "return_pct": (last["equity"] - first) / first if first else 0.0,
+            "all": st, "recent": recent, "shadow": stats_for(closed(mode, 1)),
+            "open_trades": len(open_real), "open_risk_pct": sum(t["risk_pct"] or 0 for t in open_real),
+            "halted": halted, "survival": survival(recent, last["drawdown"], bool(halted)),
+            "risk_per_trade": settings.risk.risk_per_trade, "reward_multiple": settings.risk.reward_multiple,
+        }
+
+    @app.get("/api/equity")
+    def equity(mode: str):
+        curve = j.equity_curve(mode)
+        # thin very long curves to keep the page light
+        step = max(1, len(curve) // 2000)
+        return [{"ts": c["ts"], "equity": c["equity"], "balance": c["balance"], "drawdown": c["drawdown"]} for c in curve[::step]]
+
+    @app.get("/api/trades")
+    def trades(mode: str, kind: str = "real", limit: int = 300):
+        where = "mode=?"
+        if kind == "real":
+            where += " AND shadow=0"
+        elif kind == "shadow":
+            where += " AND shadow=1"
+        rows = j.trades(where, (mode,), order="id DESC", limit=limit)
+        keep = ["id", "shadow", "symbol", "strategy", "experimental", "side", "status", "opened_at", "closed_at", "entry",
+                "stop", "take_profit", "exit_price", "pnl", "r_multiple", "outcome", "mfe_r", "mae_r", "risk_pct", "reason"]
+        out = []
+        for r in rows:
+            d = {k: r.get(k) for k in keep}
+            d["regime"] = (r.get("features") or {}).get("regime")
+            d["tags"] = (r.get("postmortem") or {}).get("tags", [])
+            out.append(d)
+        return out
+
+    @app.get("/api/trade/{trade_id}")
+    def trade(trade_id: int):
+        t = j.trade(trade_id)
+        if not t:
+            raise HTTPException(404)
+        return t
+
+    @app.get("/api/strategies")
+    def strategies(mode: str):
+        state = j.get(f"learner:{mode}") or {}
+        pop = state.get("population", {})
+        filters = state.get("filters", {})
+        params = state.get("params", {})
+        be = state.get("breakeven", {})
+        stats = {k: EdgeStat(**v) for k, v in state.get("stats", {}).items()}
+        all_closed = closed(mode, None)
+        by: dict[str, dict[str, list]] = defaultdict(lambda: {"real": [], "shadow": []})
+        for t in all_closed:
+            by[t["strategy"]]["shadow" if t["shadow"] else "real"].append(t)
+        names = sorted(set(by) | set(pop) | {"sd_reversal", "divergence", "structure_trend"})
+        out = []
+        for n in names:
+            info = pop.get(n)
+            cum, total = [], 0.0
+            for t in by[n]["real"]:
+                total += t["r_multiple"] or 0
+                cum.append({"ts": t["closed_at"], "r": round(total, 3)})
+            st = stats.get(n)
+            out.append({
+                "name": n,
+                "kind": "experimental" if info or n.startswith("exp_") else "core",
+                "stage": info["status"] if info else ("approved for live" if n in settings.live_approved_strategies else "core"),
+                "description": info.get("description") if info else None,
+                "real": stats_for(by[n]["real"]), "shadow": stats_for(by[n]["shadow"]),
+                "learned_win_rate": st.p_mean(settings.learning) if st else None,
+                "filters": filters.get(n, []), "params": params.get(n), "breakeven_at_r": be.get(n),
+                "cum_r": cum,
+            })
+        return out
+
+    @app.get("/api/breakdown")
+    def breakdown(mode: str, by: str = "regime", kind: str = "all"):
+        if by not in DIMENSIONS:
+            raise HTTPException(400, f"by must be one of {DIMENSIONS}")
+        rows = closed(mode, None if kind == "all" else (1 if kind == "shadow" else 0))
+        cells: dict[tuple, list] = defaultdict(list)
+        for t in rows:
+            v = t["symbol"] if by == "symbol" else (t.get("features") or {}).get(by)
+            cells[(t["strategy"], str(v))].append(t)
+        return [{"strategy": s, "value": v, **stats_for(ts)} for (s, v), ts in sorted(cells.items())]
+
+    @app.get("/api/postmortems")
+    def postmortems(mode: str, kind: str = "all"):
+        rows = closed(mode, None if kind == "all" else (1 if kind == "shadow" else 0))
+        loss_tags, win_tags = Counter(), Counter()
+        for t in rows:
+            tags = (t.get("postmortem") or {}).get("tags", [])
+            (loss_tags if (t["r_multiple"] or 0) < 0 else win_tags).update(tags)
+        return {"losses": loss_tags.most_common(), "wins": win_tags.most_common()}
+
+    @app.get("/api/events")
+    def events(mode: str, limit: int = 200):
+        return j.events(limit, mode)
+
+    return app
