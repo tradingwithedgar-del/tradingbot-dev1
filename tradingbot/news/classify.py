@@ -204,10 +204,105 @@ class ClaudeClassifier:
         return out
 
 
+def _parse_items(text: str, headlines: list[Headline], symbols: list[str], source: str) -> list[Assessment] | None:
+    try:
+        data = json.loads(text[text.index("{"): text.rindex("}") + 1])
+        items = data["items"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    out = [Assessment(summary=h.title, source=source) for h in headlines]
+    wanted = set(symbols)
+    for it in items:
+        try:
+            i = int(it["index"])
+            if not 0 <= i < len(out):
+                continue
+            a = out[i]
+            a.impact = max(0, min(3, int(it["impact"])))
+            a.category = it["category"] if it.get("category") in CATEGORIES else "other"
+            a.summary = str(it.get("summary") or a.summary)
+            a.effects = {e["symbol"]: (1 if e["direction"] == "up" else -1)
+                         for e in it.get("effects", []) if e.get("symbol") in wanted and e.get("direction") in ("up", "down")}
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+class ClaudeCodeClassifier:
+    """Reads headlines with Claude Code running on your own Claude subscription (Pro/Max).
+
+    Set it up once on the machine running TIIM: install Claude Code, run `claude setup-token`, and put
+    the token in .env as CLAUDE_CODE_OAUTH_TOKEN. Calls are batched (at most one every
+    `min_interval_seconds`) because they count against your plan's usage limits.
+    """
+
+    name = "claude"
+    source = "claude-subscription"
+
+    def __init__(self, binary: str, model: str = "", min_interval_seconds: int = 300, timeout: int = 180) -> None:
+        self.binary = binary
+        self.model = model
+        self.min_interval_seconds = min_interval_seconds
+        self.timeout = timeout
+        self.fallback = KeywordClassifier()
+
+    def classify(self, headlines: list[Headline], symbols: list[str]) -> list[Assessment]:
+        import subprocess
+        import tempfile
+
+        if not headlines:
+            return []
+        lines = "\n".join(f"{i}. [{h.time:%Y-%m-%d %H:%M} UTC, {h.source}] {h.title}" for i, h in enumerate(headlines))
+        prompt = (SYSTEM + "\n\nInstruments traded: " + ", ".join(symbols) +
+                  " (USTECH = Nasdaq 100, US500 = S&P 500, US30 = Dow, XAUUSD = gold, XTIUSD = WTI crude oil).\n\n"
+                  "Headlines:\n" + lines + "\n\n"
+                  "Do not use any tools. Reply with ONLY a JSON object, no other text, in this shape:\n"
+                  '{"items": [{"index": 0, "impact": 0, "category": "other", "summary": "...", '
+                  '"effects": [{"symbol": "USTECH", "direction": "up"}]}]}\n'
+                  f"impact is 0-3; category is one of {', '.join(CATEGORIES)}; direction is up or down; "
+                  "one item per headline, using its index.")
+        cmd = [self.binary, "-p", prompt, "--output-format", "json", "--max-turns", "1"]
+        if self.model:
+            cmd += ["--model", self.model]
+        try:
+            with tempfile.TemporaryDirectory() as empty:   # no project files for Claude Code to pick up
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout, cwd=empty)
+            envelope = json.loads(proc.stdout or "{}")
+            if proc.returncode != 0 or envelope.get("is_error"):
+                raise RuntimeError((envelope.get("result") or proc.stderr or "unknown error")[:200])
+            parsed = _parse_items(str(envelope.get("result", "")), headlines, symbols, self.source)
+            if parsed is None:
+                raise RuntimeError("reply was not valid JSON")
+            return parsed
+        except Exception as e:
+            log.warning("Claude Code news reading failed (%s) - keyword fallback for this batch", e)
+            return self.fallback.classify(headlines, symbols)
+
+
+def find_claude_cli() -> str | None:
+    import shutil
+    from pathlib import Path
+
+    found = shutil.which("claude")
+    if found:
+        return found
+    for p in (Path.home() / ".local/bin/claude", Path("/usr/local/bin/claude")):
+        if p.exists():
+            return str(p)
+    return None
+
+
 def make_classifier(model: str):
+    """Claude API key first, then your Claude subscription via Claude Code, else keywords."""
     if os.getenv("ANTHROPIC_API_KEY"):
         try:
             return ClaudeClassifier(model)
         except ImportError:
-            log.warning("anthropic package not installed - keyword news reading")
+            log.warning("anthropic package not installed")
+    if os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("NEWS_READER") == "claude-code":
+        cli = find_claude_cli()
+        if cli:
+            return ClaudeCodeClassifier(cli, os.getenv("NEWS_CLI_MODEL", ""),
+                                        int(os.getenv("NEWS_CLI_INTERVAL_SECONDS", "300")))
+        log.warning("CLAUDE_CODE_OAUTH_TOKEN is set but the `claude` command isn't installed - keyword news reading")
     return KeywordClassifier()

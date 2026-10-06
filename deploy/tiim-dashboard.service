@@ -1,0 +1,13 @@
+[Unit]
+Description=TIIM dashboard
+After=network-online.target tiim.service
+
+[Service]
+User=tiim
+WorkingDirectory=/opt/tiim
+ExecStart=/opt/tiim/.venv/bin/python -m tiim dashboard --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

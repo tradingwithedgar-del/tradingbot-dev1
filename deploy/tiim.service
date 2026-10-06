@@ -1,0 +1,16 @@
+[Unit]
+Description=TIIM trading agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=tiim
+WorkingDirectory=/opt/tiim
+Environment=PATH=/home/tiim/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/tiim/.venv/bin/python -m tiim run
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

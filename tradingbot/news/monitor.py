@@ -50,6 +50,7 @@ class NewsMonitor:
         self._seen: set[str] = set(journal.get("news_seen", []) or [])
         self._last_calendar: pd.Timestamp | None = None
         self._last_headlines: pd.Timestamp | None = None
+        self._last_classify: pd.Timestamp | None = None
 
     @property
     def reader(self) -> str:
@@ -101,8 +102,13 @@ class NewsMonitor:
                 log.warning("headline feeds unavailable: %s", e)
                 heads = []
             new = [h for h in heads if h.key not in self._seen]
-            for i in range(0, len(new), self.cfg.max_headlines_per_call):
-                self._classify(new[i:i + self.cfg.max_headlines_per_call])
+            # Readers on a usage allowance (Claude subscription) are called at most every N seconds;
+            # unread headlines simply wait for the next batch.
+            gap = getattr(self.classifier, "min_interval_seconds", 0)
+            if new and (self._last_classify is None or (now - self._last_classify).total_seconds() >= gap):
+                self._last_classify = now
+                for i in range(0, len(new), self.cfg.max_headlines_per_call):
+                    self._classify(new[i:i + self.cfg.max_headlines_per_call])
         cutoff = now - pd.Timedelta(minutes=self.cfg.post_event_window_minutes)
         self.breaking = [b for b in self.breaking if b.time >= cutoff]
 

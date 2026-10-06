@@ -8,6 +8,7 @@ Its rule for every trade: **"How much am I willing to lose to be wrong?"** It pi
 allowed risk. The target is 3× that risk: **5% risk for a 15% gain**.
 
 **New here? Follow [SETUP.md](SETUP.md) for step-by-step install and run instructions.**
+**To run TIIM 24/7 on a cloud server (no Mac needed), see [DEPLOY.md](DEPLOY.md).**
 
 Markets traded by default: **US30, US500, USTECH (US indices), XAUUSD (gold), NVDA, AAPL, TSLA, XTIUSD (WTI oil), BTCUSD, ETHUSD, SOLUSD**.
 Exact names differ per broker; `python -m tiim symbols` shows what your account calls them.

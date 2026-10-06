@@ -1,0 +1,6 @@
+[Unit]
+Description=Update TIIM from GitHub (only if all checks pass)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/tiim/deploy/update.sh

@@ -5,8 +5,12 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+import base64
+import hmac
+import os
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, Response
 
 from ..config import Settings
 from ..journal import Journal
@@ -56,7 +60,24 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     if not path.exists():
         raise SystemExit(f"No journal at {path}. Run the agent or a backtest first.")
     j = Journal(path)
-    app = FastAPI(title="Trading agent dashboard")
+    app = FastAPI(title="TIIM dashboard")
+
+    password = os.getenv("DASHBOARD_PASSWORD", "")
+    if password:
+        # Simple login prompt in the browser (user name can be anything) - set DASHBOARD_PASSWORD in .env
+        @app.middleware("http")
+        async def require_password(request: Request, call_next):
+            header = request.headers.get("authorization", "")
+            ok = False
+            if header.startswith("Basic "):
+                try:
+                    _, _, given = base64.b64decode(header[6:]).decode().partition(":")
+                    ok = hmac.compare_digest(given, password)
+                except Exception:
+                    ok = False
+            if not ok:
+                return Response("Login required", status_code=401, headers={"WWW-Authenticate": 'Basic realm="TIIM"'})
+            return await call_next(request)
 
     def closed(mode: str, shadow: int | None = 0) -> list[dict]:
         if shadow is None:

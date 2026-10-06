@@ -203,3 +203,37 @@ def test_calendar_falls_back_to_saved_copy_when_rate_limited(tmp_path):
     m2.refresh(NOW)                                  # fresh start while rate-limited
     assert [e.title for e in m2.events] == ["CPI m/m"]
     assert m2.blackout("USTECH", NOW + pd.Timedelta(hours=2)) is not None
+
+
+def test_subscription_reader_via_claude_code_cli(tmp_path):
+    import stat
+    import sys
+
+    from tradingbot.news.classify import ClaudeCodeClassifier
+
+    payload = {"items": [{"index": 0, "impact": 3, "category": "energy", "summary": "OPEC cuts",
+                          "effects": [{"symbol": "XTIUSD", "direction": "up"}]}]}
+    fake = tmp_path / "claude"
+    fake.write_text(f"#!{sys.executable}\nimport json\nprint(json.dumps({{'type': 'result', 'is_error': False, "
+                    f"'result': 'Here you go: ' + json.dumps({payload!r})}}))\n")
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    a = ClaudeCodeClassifier(str(fake)).classify([Headline(NOW, "OPEC+ agrees surprise output cut", "x", "")], SYMS)[0]
+    assert a.impact == 3 and a.effects == {"XTIUSD": 1} and a.source == "claude-subscription"
+    broken = tmp_path / "broken"
+    broken.write_text(f"#!{sys.executable}\nimport sys\nprint('{{}}'); sys.exit(1)\n")
+    broken.chmod(broken.stat().st_mode | stat.S_IEXEC)
+    b = ClaudeCodeClassifier(str(broken)).classify([Headline(NOW, "OPEC+ agrees surprise output cut", "x", "")], SYMS)[0]
+    assert b.source == "keywords"                     # failures fall back, never crash TIIM
+
+
+def test_dashboard_password(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from tradingbot.dashboard.app import create_app
+
+    Journal(tmp_path / "d.db", mode="demo").record_equity(100, 100, 100)
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "s3cret")
+    c = TestClient(create_app(tmp_path / "d.db"))
+    assert c.get("/api/modes").status_code == 401
+    assert c.get("/api/modes", auth=("tiim", "wrong")).status_code == 401
+    assert c.get("/api/modes", auth=("tiim", "s3cret")).json() == ["demo"]
