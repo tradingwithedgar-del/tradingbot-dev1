@@ -33,17 +33,60 @@ class Param:
     hi: float
 
 
+ALL_MARKETS = ("index", "stock", "gold", "metal", "oil", "gas", "crypto", "fx")
+
+
 class Strategy:
     """A strategy turns a MarketContext into at most one Signal.
 
-    `params` are the knobs the learner is allowed to tune within [lo, hi].
+    Every strategy in the library describes itself, so TIIM can pull the right ones for the
+    situation and you can read what each one does on the dashboard:
+        name         unique id (lowercase, no spaces)
+        title        short human name
+        description  what it trades and why, in plain words
+        author       "TIIM" for built-ins, your name for strategies you add
+        markets      asset classes it may trade (see ALL_MARKETS)
+        needs        extra data it requires: "news", "earnings" (skipped when that data isn't available)
+        stricter     (param, step) - how TIIM makes it more selective when its trades keep failing early
+    `params` are the knobs TIIM is allowed to tune, each within [lo, hi].
     """
 
     name = "base"
+    title = ""
+    description = ""
+    author = "TIIM"
+    markets: tuple[str, ...] = ALL_MARKETS
+    needs: tuple[str, ...] = ()
+    stricter: tuple[str, float] | None = None
     experimental = False
 
     def __init__(self) -> None:
         self.params: dict[str, Param] = {}
+
+    def applies(self, ctx: MarketContext) -> bool:
+        """Whether this strategy should even look at this situation."""
+        from ..news.assets import asset_class
+
+        if asset_class(ctx.symbol) not in self.markets:
+            return False
+        if "news" in self.needs and not ctx.news:
+            return False
+        if "earnings" in self.needs and not ctx.earnings:
+            return False
+        return True
+
+    def clone(self, name: str | None = None) -> "Strategy":
+        """Same strategy with the same parameters, optionally under another name (used for testing variants)."""
+        twin = type(self)()
+        twin.load_param_values(self.param_values())
+        if name:
+            twin.name = name
+        return twin
+
+    def info(self) -> dict:
+        return {"name": self.name, "title": self.title or self.name, "description": self.description,
+                "author": self.author, "markets": list(self.markets), "needs": list(self.needs),
+                "params": self.param_values()}
 
     def p(self, key: str) -> float:
         return self.params[key].value

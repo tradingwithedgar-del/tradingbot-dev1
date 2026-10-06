@@ -1,14 +1,14 @@
 """Command line entry point.
 
-    python -m tradingbot symbols             # log in and list the exact symbol names on your account
-    python -m tradingbot run                 # trade on the account in .env (demo by default)
-    python -m tradingbot news                # check news feeds, upcoming events and headline reading
-    python -m tradingbot backtest --synthetic
-    python -m tradingbot backtest --csv EURUSD=data/eurusd_15m.csv
-    python -m tradingbot backtest --tradelocker --days 60
-    python -m tradingbot dashboard           # http://localhost:8000
-    python -m tradingbot status
-    python -m tradingbot stop | resume
+    python -m tiim symbols             # log in and list the exact symbol names on your account
+    python -m tiim run                 # trade on the account in .env (demo by default)
+    python -m tiim news                # check news feeds, upcoming events and headline reading
+    python -m tiim backtest --synthetic
+    python -m tiim backtest --csv EURUSD=data/eurusd_15m.csv
+    python -m tiim backtest --tradelocker --days 60
+    python -m tiim dashboard           # http://localhost:8000
+    python -m tiim status
+    python -m tiim stop | resume
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _require_symbols(broker, symbols: list[str]) -> None:
         lines = [f"These symbols don't exist on your TradeLocker account: {', '.join(missing)}"]
         for sym, similar in missing.items():
             lines.append(f"  {sym}: similar names -> {', '.join(similar) or '(none found)'}")
-        lines.append("Fix BOT_SYMBOLS in .env (run `python -m tradingbot symbols` to see every name).")
+        lines.append("Fix BOT_SYMBOLS in .env (run `python -m tiim symbols` to see every name).")
         raise SystemExit("\n".join(lines))
 
 
@@ -80,6 +80,33 @@ def cmd_news(args) -> None:
         print(f"  {sym:<8} {st['news_state']:<15} {st['news_kind']:<14} {st['news_title'][:60]}")
 
 
+def cmd_strategies(args) -> None:
+    from .journal import Journal
+    from .learning import EdgeStat
+    from .strategies.registry import USER_DIR, disabled, discover
+
+    s = Settings()
+    classes, problems = discover()
+    off = disabled(s.db_path.parent)
+    stats = {}
+    if s.db_path.exists():
+        state = Journal(s.db_path, mode=s.mode).get(f"learner:{s.mode}") or {}
+        stats = {k: EdgeStat(**v) for k, v in state.get("stats", {}).items()}
+    print(f"TIIM strategy library ({len(classes)} strategies; yours go in {USER_DIR}):\n")
+    for cls in classes:
+        st = cls()
+        e = stats.get(st.name)
+        rec = f"{e.count} trades, {e.expected_r(e.p_mean(s.learning), s.risk.reward_multiple):+.2f}R/trade" if e else "no trades yet"
+        flag = "off      " if st.name in off else ("live ok  " if st.name in s.live_approved_strategies else "demo only")
+        print(f"  [{flag}] {st.name:<18} {st.title} - by {st.author} - {', '.join(st.markets)}")
+        print(f"         {st.description}")
+        print(f"         {rec}\n")
+    for p in problems:
+        print(f"  problem: {p}")
+    print("Switch one off: add its name to data/strategies.json -> {\"disabled\": [\"name\"]}")
+    print("Allow one on the live account: add it to LIVE_APPROVED_STRATEGIES in .env")
+
+
 def cmd_run(args) -> None:
     from .agent import Agent
     from .broker.tradelocker_broker import TradeLockerBroker
@@ -88,21 +115,24 @@ def cmd_run(args) -> None:
     s = Settings()
     s.validate()
     if s.mode == "backtest":
-        raise SystemExit("Use `python -m tradingbot backtest` for backtests.")
+        raise SystemExit("Use `python -m tiim backtest` for backtests.")
     broker = TradeLockerBroker(s)
     _require_symbols(broker, s.symbols)
     journal = Journal(s.db_path, mode=s.mode)
-    news = None
+    news = earnings = None
     if s.news.enabled:
         from .news import NewsMonitor
+        from .news.earnings_history import EarningsDesk
 
         news = NewsMonitor(s, journal)
+        earnings = EarningsDesk(s, broker, journal, news)
         logging.info("News monitor on (headlines read by %s)", news.reader)
-    agent = Agent(s, broker, journal, news=news)
+    agent = Agent(s, broker, journal, news=news, earnings=earnings)
+    logging.info("Strategy library: %s", ", ".join(st.name for st in agent.core))
     banner = "LIVE ACCOUNT - REAL MONEY" if s.is_live else "demo account"
-    logging.info("Agent started on %s | symbols=%s tf=%s risk=%.1f%% target=%.0fR",
+    logging.info("TIIM started on %s | symbols=%s tf=%s risk=%.1f%% target=%.0fR",
                  banner, s.symbols, s.timeframe, s.risk.risk_per_trade * 100, s.risk.reward_multiple)
-    journal.event("start", f"agent started ({banner})")
+    journal.event("start", f"TIIM started ({banner})")
     while True:
         try:
             agent.run_cycle()
@@ -146,7 +176,7 @@ def cmd_backtest(args) -> None:
     wins = sum(1 for t in closed if (t["r_multiple"] or 0) > 0)
     total_r = sum(t["r_multiple"] or 0 for t in closed)
     print(f"real trades: {len(closed)}  win rate: {wins / max(1, len(closed)):.1%}  total: {total_r:+.1f}R")
-    print("open the dashboard with: python -m tradingbot dashboard --db data/backtest.db")
+    print("open the dashboard with: python -m tiim dashboard --db data/backtest.db")
 
 
 def cmd_dashboard(args) -> None:
@@ -191,9 +221,10 @@ def cmd_resume(args) -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    p = argparse.ArgumentParser(prog="tradingbot")
+    p = argparse.ArgumentParser(prog="tiim", description="TIIM - self-learning trading agent")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("run").set_defaults(fn=cmd_run)
+    sub.add_parser("strategies", help="list TIIM's strategy library").set_defaults(fn=cmd_strategies)
     sub.add_parser("news", help="check the news feeds, calendar and how headlines are read").set_defaults(fn=cmd_news)
     sy = sub.add_parser("symbols", help="log in and list instrument names")
     sy.add_argument("--search", default="")

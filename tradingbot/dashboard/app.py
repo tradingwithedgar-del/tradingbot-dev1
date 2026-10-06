@@ -10,7 +10,8 @@ from fastapi.responses import FileResponse
 
 from ..config import Settings
 from ..journal import Journal
-from ..learning import EdgeStat
+from ..learning import CANDIDATE, EdgeStat
+from ..strategies.registry import disabled, discover
 
 STATIC = Path(__file__).parent / "static"
 DIMENSIONS = ["regime", "session", "structure", "bias", "volatility", "symbol", "rsi_zone", "confluence",
@@ -145,20 +146,40 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         by: dict[str, dict[str, list]] = defaultdict(lambda: {"real": [], "shadow": []})
         for t in all_closed:
             by[t["strategy"]]["shadow" if t["shadow"] else "real"].append(t)
-        names = sorted(set(by) | set(pop) | {"sd_reversal", "divergence", "structure_trend"})
+        classes, _ = discover()
+        lib = {c.name: c() for c in classes}
+        off = disabled(settings.db_path.parent)
+        challengers = state.get("challengers", {})
+        names = sorted(set(by) | set(pop) | set(lib), key=lambda n: (n not in lib, n.split(CANDIDATE)[0], n))
         out = []
         for n in names:
             info = pop.get(n)
+            base = n.split(CANDIDATE)[0]
+            meta = lib.get(base)
             cum, total = [], 0.0
             for t in by[n]["real"]:
                 total += t["r_multiple"] or 0
                 cum.append({"ts": t["closed_at"], "r": round(total, 3)})
             st = stats.get(n)
+            if CANDIDATE in n:
+                kind, stage = "variant", "testing a tweak"
+                desc = "Tweaked copy of " + base + ": " + ", ".join(
+                    f"{k}={v:.2f}" for k, v in (challengers.get(base, {}).get("changed") or {}).items())
+            elif info or n.startswith("exp_"):
+                kind, stage, desc = "experimental", (info or {}).get("status", "retired"), (info or {}).get("description")
+            else:
+                kind = "library"
+                stage = ("disabled" if n in off else "approved for live" if n in settings.live_approved_strategies
+                         else "demo only")
+                desc = meta.description if meta else None
             out.append({
                 "name": n,
-                "kind": "experimental" if info or n.startswith("exp_") else "core",
-                "stage": info["status"] if info else ("approved for live" if n in settings.live_approved_strategies else "core"),
-                "description": info.get("description") if info else None,
+                "title": (meta.title if meta and CANDIDATE not in n else None),
+                "author": meta.author if meta else "TIIM",
+                "markets": list(meta.markets) if meta else [],
+                "kind": kind,
+                "stage": stage,
+                "description": desc,
                 "real": stats_for(by[n]["real"]), "shadow": stats_for(by[n]["shadow"]),
                 "learned_win_rate": st.p_mean(settings.learning) if st else None,
                 "filters": filters.get(n, []), "params": params.get(n), "breakeven_at_r": be.get(n),

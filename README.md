@@ -1,6 +1,6 @@
-# Self-learning TradeLocker trading agent (PlexyTrade)
+# TIIM: self-learning TradeLocker trading agent (PlexyTrade)
 
-An autonomous trading agent for TradeLocker, built to run on a **PlexyTrade demo account first**
+TIIM is an autonomous trading agent for TradeLocker, built to run on a **PlexyTrade demo account first**
 and only move to the live account after you approve it.
 
 Its rule for every trade: **"How much am I willing to lose to be wrong?"** It picks the stop first
@@ -10,13 +10,13 @@ allowed risk. The target is 3× that risk: **5% risk for a 15% gain**.
 **New here? Follow [SETUP.md](SETUP.md) for step-by-step install and run instructions.**
 
 Markets traded by default: **US30, US500, USTECH (US indices), XAUUSD (gold), NVDA, AAPL, TSLA, XTIUSD (WTI oil), BTCUSD, ETHUSD, SOLUSD**.
-Exact names differ per broker; `python -m tradingbot symbols` shows what your account calls them.
+Exact names differ per broker; `python -m tiim symbols` shows what your account calls them.
 
 ```
-python -m tradingbot symbols                  # log in and check symbol names
-python -m tradingbot backtest --synthetic     # smoke test with fake data, no account needed
-python -m tradingbot dashboard --db data/backtest.db
-python -m tradingbot run                      # trade the account in .env (demo by default)
+python -m tiim symbols                  # log in and check symbol names
+python -m tiim backtest --synthetic     # smoke test with fake data, no account needed
+python -m tiim dashboard --db data/backtest.db
+python -m tiim run                      # trade the account in .env (demo by default)
 ```
 
 ---
@@ -86,7 +86,7 @@ Every time a bar closes, for each symbol the agent:
 | Max open trades / max total open risk | 2 / 10% |
 | Daily loss limit | −10%: no new trades for the rest of the day |
 | Drawdown scaling | risk shrinks linearly from 5% → 1% as drawdown approaches the halt level |
-| Hard halt | −30% from peak: the agent stops and waits for you (`python -m tradingbot resume`) |
+| Hard halt | −30% from peak: the agent stops and waits for you (`python -m tiim resume`) |
 | Never | martingale, grid, averaging down, or increasing size after a loss |
 
 ---
@@ -119,6 +119,32 @@ Every time a bar closes, for each symbol the agent:
 
 ---
 
+## 3a. Strategy library
+
+TIIM pulls its strategies from a library. Each strategy describes what it does, which markets it fits
+(indices, stocks, gold, oil, crypto, FX) and what data it needs (news, earnings). TIIM only runs the ones
+that fit the situation, and its learned filters switch strategies off in conditions where they lose.
+
+| Strategy | What it does |
+|---|---|
+| `sd_reversal` | Retest of a fresh supply/demand zone with a rejection candle |
+| `divergence` | RSI/MACD divergence at a swing, confirmed by a candle |
+| `structure_trend` | Pullbacks in HH/HL uptrends and LH/LL downtrends |
+| `news_momentum` / `news_fade` | Price-confirmed reaction to high-impact news, or its over-extension |
+| `earnings_runup` | Trades a stock's usual drift into earnings (from its own history) only when the chart agrees; closed before the release |
+| `earnings_drift` | After a release, joins the reaction once price breaks the first hour's range, if the stock's earnings moves usually continue |
+
+* **Your strategies:** add a file to `my_strategies/` (see `my_strategies/README.md` and `TEMPLATE.py`).
+  TIIM loads it at start-up. `python -m tiim strategies` lists the whole library with results.
+* **Switch one off:** `data/strategies.json` → `{"disabled": ["news_fade"]}`.
+* **TIIM improves each strategy (demo):** a tweaked copy of every strategy (1–2 settings nudged) runs as
+  virtual trades. After 25+ trades, if the tweak earns at least 0.15R per trade more, TIIM adopts it
+  ("TIIM improved ..." in the journal). Otherwise the tweak is dropped and a new one is tried.
+* **Earnings, price action first:** for each stock TIIM measures past releases from the daily chart:
+  the run-up in the 5 sessions before, the reaction gap, and whether the move kept going over the
+  next 5 sessions. Dates come from Finnhub or `data/earnings.json` when available, otherwise from the
+  chart's largest quarterly gaps. History only sets the bias; the current chart must agree before it trades.
+
 ## 3b. News awareness
 
 * **Scheduled events:** the weekly economic calendar (CPI, Fed/FOMC, jobs, GDP, PCE, ISM, oil inventories) and
@@ -132,16 +158,20 @@ Every time a bar closes, for each symbol the agent:
   * `news_momentum`: after high-impact news, rides a strong impulse candle if it agrees with the headline.
   * `news_fade`: trades the snap-back when a news spike over-extends and gets rejected.
   While news is hot, these also check 5-minute bars, so the agent reacts within minutes.
+* **News protects, price action decides.** When a major headline (impact 3) breaks against an open trade,
+  TIIM takes the profit if the trade is up 1.5R or more, or moves the stop to break-even if it's up 0.3R or more.
+  If the trade is at a loss, the stop stays where it is. TIIM also won't open a new trade straight into
+  fresh major news pointing the other way.
 * **Learning:** every trade records the news situation (`news_state`, `news_kind`, `news_agree`), so the
   agent learns which kinds of news are worth trading on which symbols, and blocks the ones that lose.
 * Headlines reach public feeds minutes after the fact. The edge is in reading the reaction and its
-  follow-through, not in being first. `python -m tradingbot news` shows what the agent currently sees.
+  follow-through, not in being first. `python -m tiim news` shows what the agent currently sees.
 
 ## 4. Dashboard
 
 ```bash
-python -m tradingbot dashboard                 # demo/live journal, http://127.0.0.1:8000
-python -m tradingbot dashboard --db data/backtest.db
+python -m tiim dashboard                 # demo/live journal, http://127.0.0.1:8000
+python -m tiim dashboard --db data/backtest.db
 ```
 * **What the agent sees:** per-symbol chart with its supply/demand zones, HH/HL/LH/LL labels, EMA 50/200,
   RSI, MACD, divergences, open trades (entry/stop/target), and its read of trend, bias, regime and news
@@ -191,14 +221,16 @@ weaknesses. `tradingbot/compliance.py` enforces this. The agent:
 
 | Command | What it does |
 |---|---|
-| `python -m tradingbot symbols [--search NAS]` | Log in, list instrument names, check `BOT_SYMBOLS` |
-| `python -m tradingbot run` | Run the agent (polls every 20s, acts on each new closed bar) |
-| `python -m tradingbot status` | Mode, halt state, open trades, latest journal entries |
-| `python -m tradingbot stop` | Creates `data/STOP`: no new real trades (open trades keep their SL/TP) |
-| `python -m tradingbot resume` | Clears STOP and a drawdown halt; drawdown is measured from now |
-| `python -m tradingbot backtest --csv EURUSD=eurusd_15m.csv` | Backtest on your own data (`time,open,high,low,close`) |
-| `python -m tradingbot backtest --tradelocker --days 60` | Backtest on history downloaded from TradeLocker |
-| `python -m tradingbot backtest --synthetic` | Plumbing test on random data (it has no edge to find) |
+| `python -m tiim strategies` | List the strategy library, who wrote each one, and how each is doing |
+| `python -m tiim news` | Check the news feeds, upcoming events and how headlines are read |
+| `python -m tiim symbols [--search NAS]` | Log in, list instrument names, check `BOT_SYMBOLS` |
+| `python -m tiim run` | Run the agent (polls every 20s, acts on each new closed bar) |
+| `python -m tiim status` | Mode, halt state, open trades, latest journal entries |
+| `python -m tiim stop` | Creates `data/STOP`: no new real trades (open trades keep their SL/TP) |
+| `python -m tiim resume` | Clears STOP and a drawdown halt; drawdown is measured from now |
+| `python -m tiim backtest --csv EURUSD=eurusd_15m.csv` | Backtest on your own data (`time,open,high,low,close`) |
+| `python -m tiim backtest --tradelocker --days 60` | Backtest on history downloaded from TradeLocker |
+| `python -m tiim backtest --synthetic` | Plumbing test on random data (it has no edge to find) |
 
 Backtests fill at the next bar's open, include spread, and assume the stop was hit first whenever a bar
 touches both stop and target, so results lean pessimistic.

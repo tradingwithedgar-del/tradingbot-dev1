@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("BOT_DATA_DIR", ROOT / "data"))
 
 # US indices, gold, NVIDIA, Apple, Tesla, WTI oil and crypto, named as on PlexyTrade's TradeLocker.
-# Full list of PlexyTrade names: SYMBOLS.md. `python -m tradingbot symbols` checks them.
+# Full list of PlexyTrade names: SYMBOLS.md. `python -m tiim symbols` checks them.
 DEFAULT_SYMBOLS = "US30,US500,USTECH,XAUUSD,NVDA,AAPL,TSLA,XTIUSD,BTCUSD,ETHUSD,SOLUSD"
 
 
@@ -74,6 +74,10 @@ class LearningConfig:
     promote_min_expectancy: float = 0.3
     retire_max_expectancy: float = 0.0
     live_candidate_min_trades: int = 30
+    # Strategy improvement (demo only): each strategy is shadowed by a tweaked "challenger" variant.
+    challenger_min_trades: int = 25        # trades the challenger needs before it is judged
+    challenger_max_trades: int = 45        # give up on it after this many without a clear win
+    challenger_margin_r: float = 0.15      # must beat the current version by this much expectancy
 
 
 @dataclass
@@ -94,6 +98,10 @@ class NewsConfig:
     earnings_block_hours: int = 20         # no new stock trades this long before earnings
     flatten_before_earnings_minutes: int = 45  # close open stock trades before earnings
     fast_timeframe: str = "5m"             # timeframe used to react while news is hot
+    # Protecting open trades when major news breaks against them (price action still opened the trade).
+    guard_min_impact: int = 3
+    guard_breakeven_r: float = 0.3         # in profit by this much -> stop moved to break-even
+    guard_close_r: float = 1.5             # in profit by this much -> take the profit now
     feeds: list[str] = field(default_factory=lambda: [f for f in os.getenv("NEWS_FEEDS", "").split(",") if f.strip()])
 
 

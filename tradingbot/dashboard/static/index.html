@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent Dashboard</title>
+<title>TIIM Dashboard</title>
 <script src="/plotly.min.js"></script>
 <style>
 :root {
@@ -76,7 +76,7 @@ tr.click:hover { background: var(--grid); }
 <body>
 <header>
   <div>
-    <h1>Trading agent</h1>
+    <h1>TIIM</h1>
     <div class="sub" id="ruleline">Loading...</div>
   </div>
   <div class="controls">
@@ -91,7 +91,7 @@ tr.click:hover { background: var(--grid); }
 
   <section class="card" id="viewCard">
     <div class="controls" style="justify-content:space-between">
-      <div><h2>What the agent sees</h2><p class="sub">Its zones, swing structure, indicators and open trades on the latest closed bars. Updates every bar close. To close a trade, close it in TradeLocker. The agent notices and records it as closed by you.</p></div>
+      <div><h2>What TIIM sees</h2><p class="sub">Its zones, swing structure, indicators and open trades on the latest closed bars. Updates every bar close. To close a trade, close it in TradeLocker. TIIM notices and records it as closed by you.</p></div>
       <div class="controls">
         <label>Symbol <select id="viewSym"></select></label>
         <label><input type="checkbox" id="showSwings" checked> swings</label>
@@ -113,7 +113,7 @@ tr.click:hover { background: var(--grid); }
   <section class="card half"><h2>Cumulative R by strategy</h2><p class="sub">Real trades only. Rising line = the strategy is earning its keep</p><div class="chart" id="cumChart"></div></section>
 
   <section class="card">
-    <h2>Strategies</h2><p class="sub">Shadow = virtual trades the agent tracks without risking money (experiments, filtered setups, setups it couldn't afford)</p>
+    <h2>Strategy library</h2><p class="sub">Every strategy TIIM can pull from: built-in, yours (my_strategies folder), tweaks it is testing, and its own experiments. Shadow = virtual trades tracked without risking money</p>
     <div class="table-wrap"><table id="stratTable"></table></div>
   </section>
 
@@ -132,7 +132,7 @@ tr.click:hover { background: var(--grid); }
   </section>
 
   <section class="card half"><h2>Why trades lost</h2><p class="sub">Post-mortem tags on losing trades (real + shadow)</p><div class="chart" id="lossTags"></div></section>
-  <section class="card half"><h2>Agent journal</h2><p class="sub">Lessons learned, parameter tuning, experiments and approvals needed</p><ul class="events" id="events"></ul></section>
+  <section class="card half"><h2>Agent journal</h2><p class="sub">What TIIM learned, how it tuned its strategies, news it acted on, and approvals it needs</p><ul class="events" id="events"></ul></section>
 
   <section class="card" id="detail">
     <div class="controls" style="justify-content:space-between"><h2 id="dTitle"></h2><button id="dClose">Close</button></div>
@@ -350,8 +350,9 @@ function renderStrategies(strats, trades) {
   } else $('cumChart').innerHTML = '<div class="empty">No closed real trades yet</div>';
 
   const rows = strats.map(s => `<tr>
-      <td><span class="badge" style="padding:1px 8px"><span class="dot" style="background:${seriesColor(s.name)}"></span>${esc(s.name)}</span>
-        ${s.description ? `<div class="muted" style="white-space:normal;max-width:420px">${esc(s.description)}</div>` : ''}</td>
+      <td><span class="badge" style="padding:1px 8px"><span class="dot" style="background:${seriesColor(s.name)}"></span>${esc(s.title || s.name)}</span>
+        <span class="muted">${esc(s.author || '')}${s.markets && s.markets.length && s.markets.length < 8 ? ' · ' + esc(s.markets.join(', ')) : ''}</span>
+        ${s.description ? `<div class="muted" style="white-space:normal;max-width:460px">${esc(s.description)}</div>` : ''}</td>
       <td>${esc(s.stage)}</td>
       <td>${s.real.trades}</td><td>${fmtPct(s.real.win_rate, 0)}</td><td class="${(s.real.expectancy_r||0) >= 0 ? 'win' : 'loss'}">${fmtR(s.real.expectancy_r)}</td>
       <td>${s.shadow.trades}</td><td>${fmtR(s.shadow.expectancy_r)}</td>

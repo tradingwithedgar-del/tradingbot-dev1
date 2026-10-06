@@ -28,14 +28,6 @@ CONDITION_KEYS = ["regime", "trend_strength", "volatility", "structure", "bias",
                   "symbol", "with_structure", "zone_fresh", "divergence", "confluence",
                   "news_state", "news_kind", "news_agree"]
 
-# Which parameter makes a strategy more selective, and in which direction.
-STRICTER = {
-    "sd_reversal": ("min_wick_ratio", +0.05),
-    "divergence": ("min_osc_gap", +1.0),
-    "structure_trend": ("max_pullback_atr", -0.1),
-    "news_momentum": ("min_impulse_atr", +0.1),
-    "news_fade": ("min_spike_atr", +0.25),
-}
 
 
 @dataclass
@@ -94,6 +86,9 @@ class Decision:
     reasons: list[str]
 
 
+CANDIDATE = "@cand"
+
+
 class Learner:
     def __init__(self, journal: Journal, cfg: LearningConfig, risk_cfg: RiskConfig, live: bool,
                  rng: random.Random | None = None) -> None:
@@ -109,6 +104,7 @@ class Learner:
         self.breakeven: dict[str, float] = {}          # strategy -> move stop to BE at this R
         self.population: dict[str, dict] = {}          # experimental genomes
         self.tune_counter: dict[str, int] = {}
+        self.challengers: dict[str, dict] = {}         # strategy -> tweaked parameter set under test
         self.load()
 
     # --- persistence -----------------------------------------------------------
@@ -130,12 +126,14 @@ class Learner:
         self.breakeven = state.get("breakeven", {})
         self.population = state.get("population", {})
         self.tune_counter = state.get("tune_counter", {})
+        self.challengers = {} if self.j.mode == "live" else state.get("challengers", {})
 
     def save(self) -> None:
         self.j.set(self._key, {
             "stats": {k: asdict(v) for k, v in self.stats.items()},
             "filters": self.filters, "params": self.params, "breakeven": self.breakeven,
             "population": self.population, "tune_counter": self.tune_counter,
+            "challengers": self.challengers,
         })
 
     # --- edge statistics ---------------------------------------------------------
@@ -167,6 +165,8 @@ class Learner:
     def decide(self, strategy: Strategy, features: dict, symbol: str, live_approved: list[str]) -> Decision:
         s = strategy.name
         reasons: list[str] = []
+        if CANDIDATE in s:
+            return Decision("shadow", 0, 0, s, ["tweaked variant under test - virtual trades only"])
         if strategy.experimental:
             status = self.population.get(s, {}).get("status", "shadow")
             if self.live:
@@ -240,8 +240,8 @@ class Learner:
             new = strategy.set_param("stop_atr_buffer", old * 1.2)
             if new != old:
                 changes.append(f"widened stop buffer {old:.2f} -> {new:.2f} ATR ({share('stop_too_tight', losses):.0%} of losses were stop-hunts)")
-        if s in STRICTER and share("immediately_wrong", losses) > 0.5:
-            prm, step = STRICTER[s]
+        if strategy.stricter and share("immediately_wrong", losses) > 0.5:
+            prm, step = strategy.stricter
             old = strategy.p(prm)
             new = strategy.set_param(prm, old + step)
             if new != old:
@@ -264,6 +264,60 @@ class Learner:
         for st in strategies:
             if st.name in self.params:
                 st.load_param_values(self.params[st.name])
+
+    # --- improving strategies: champion vs challenger (demo only) ------------------------------
+    def challenger_for(self, strategy: Strategy) -> Strategy | None:
+        """A copy of the strategy with 1-2 parameters nudged, traded virtually alongside it."""
+        if self.live or not strategy.params or strategy.experimental:
+            return None
+        name = strategy.name
+        if name not in self.challengers:
+            cand = strategy.clone()
+            keys = self.rng.sample(sorted(cand.params), min(len(cand.params), self.rng.choice([1, 2])))
+            for k in keys:
+                prm = cand.params[k]
+                span = prm.hi - prm.lo
+                cand.set_param(k, prm.value + self.rng.choice([-1, 1]) * self.rng.uniform(0.1, 0.25) * span)
+            changed = {k: cand.p(k) for k in keys if cand.p(k) != strategy.p(k)}
+            if not changed:
+                return None
+            self.challengers[name] = {"params": cand.param_values(), "changed": changed}
+            self._reset_stats(name + CANDIDATE)
+            self.save()
+        twin = strategy.clone(name + CANDIDATE)
+        twin.load_param_values(self.challengers[name]["params"])
+        return twin
+
+    def _reset_stats(self, prefix: str) -> None:
+        for k in [k for k in self.stats if k == prefix or k.startswith(prefix + "|")]:
+            del self.stats[k]
+        self.filters.pop(prefix, None)
+
+    def judge_challenger(self, strategy: Strategy) -> str | None:
+        """Adopt the challenger's parameters if it clearly beats the current version."""
+        name = strategy.name
+        info = self.challengers.get(name)
+        cand = self.stats.get(name + CANDIDATE)
+        if not info or cand is None or cand.count < self.cfg.challenger_min_trades:
+            return None
+        champ = self.stats.get(name) or EdgeStat()
+        exp_c = cand.expected_r(cand.p_mean(self.cfg), self.rr)
+        exp_0 = champ.expected_r(champ.p_mean(self.cfg), self.rr)
+        verdict = None
+        if exp_c > exp_0 + self.cfg.challenger_margin_r:
+            old = strategy.param_values()
+            strategy.load_param_values(info["params"])
+            self.params[name] = strategy.param_values()
+            changes = ", ".join(f"{k} {old[k]:.2f} -> {v:.2f}" for k, v in info["changed"].items())
+            verdict = f"TIIM improved {name}: {changes} ({exp_c:+.2f}R vs {exp_0:+.2f}R per trade over {cand.count} test trades)"
+            self.j.event("tuning", verdict, {"strategy": name, "params": self.params[name]})
+        elif cand.count >= self.cfg.challenger_max_trades:
+            verdict = f"{name}: tested tweak ({info['changed']}) was not better ({exp_c:+.2f}R vs {exp_0:+.2f}R) - discarded"
+        if verdict:
+            del self.challengers[name]
+            self._reset_stats(name + CANDIDATE)
+            self.save()
+        return verdict
 
     # --- evolution of experimental strategies --------------------------------------------
     def experimental_strategies(self) -> list[ExperimentalStrategy]:

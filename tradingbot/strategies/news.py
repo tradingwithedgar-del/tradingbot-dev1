@@ -23,6 +23,12 @@ def _news_ok(ctx: MarketContext, max_age: float) -> bool:
 
 class NewsMomentum(Strategy):
     name = "news_momentum"
+    title = "News momentum"
+    description = ("After high-impact news, rides a strong impulse candle - only when price confirms the news "
+                   "direction. Stop beyond the impulse candle.")
+    needs = ("news",)
+    markets = ("index", "stock", "gold", "metal", "oil", "crypto")
+    stricter = ("min_impulse_atr", 0.1)
 
     def __init__(self) -> None:
         super().__init__()
@@ -58,6 +64,12 @@ class NewsMomentum(Strategy):
 
 class NewsFade(Strategy):
     name = "news_fade"
+    title = "News spike fade"
+    description = ("When a news spike over-extends and the next candle rejects it, trades the snap-back. Stop beyond "
+                   "the spike extreme.")
+    needs = ("news",)
+    markets = ("index", "stock", "gold", "metal", "oil", "crypto")
+    stricter = ("min_spike_atr", 0.25)
 
     def __init__(self) -> None:
         super().__init__()

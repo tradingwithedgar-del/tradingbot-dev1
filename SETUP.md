@@ -78,15 +78,15 @@ BOT_TIMEFRAME=15m
 ### Check the login and symbol names
 Brokers name instruments differently (for example `NAS100` vs `US100` vs `USTEC`). Run:
 ```
-python -m tradingbot symbols
+python -m tiim symbols
 ```
 It logs in, lists every instrument on your account, and tells you which of your `BOT_SYMBOLS` it can't find,
 with similar names. To search for one:
 ```
-python -m tradingbot symbols --search NAS
-python -m tradingbot symbols --search OIL
+python -m tiim symbols --search NAS
+python -m tiim symbols --search OIL
 ```
-Fix any names in `.env`, save, and run `python -m tradingbot symbols` again until it says
+Fix any names in `.env`, save, and run `python -m tiim symbols` again until it says
 **"all symbols found - ready to run"**.
 
 ## Step 6: Use it
@@ -97,18 +97,18 @@ Every time you open a new terminal, first go into the folder (Step 3) and activa
 
 ### a) Backtest on real price history (no trades are placed)
 ```
-python -m tradingbot backtest --tradelocker --days 60
+python -m tiim backtest --tradelocker --days 60
 ```
 This downloads 60 days of history for your symbols with your demo login, then lets the agent trade it in a
 simulator. It takes a few minutes. Then look at the results:
 ```
-python -m tradingbot dashboard --db data/backtest.db
+python -m tiim dashboard --db data/backtest.db
 ```
 Open **http://127.0.0.1:8000** in your browser. Press **Ctrl + C** in the terminal to stop the dashboard.
 
 ### b) Start trading the demo account
 ```
-python -m tradingbot run
+python -m tiim run
 ```
 Leave this window open. The agent checks the market every 20 seconds and acts each time a 15-minute bar closes.
 **Your computer has to stay on and awake while it runs.** Turn off sleep in your power settings. A cheap VPS
@@ -116,19 +116,19 @@ can run it 24/7 later.
 
 To watch it, open a **second** terminal (Step 3, then activate) and run:
 ```
-python -m tradingbot dashboard
+python -m tiim dashboard
 ```
 and open **http://127.0.0.1:8000**.
 
 ### Useful commands
 | Command | What it does |
 |---|---|
-| `python -m tradingbot status` | Quick look: open trades, latest journal entries, halted or not |
-| `python -m tradingbot stop` | No new trades. Open trades keep their stop loss and take profit |
-| `python -m tradingbot resume` | Allow new trades again (also clears a drawdown halt) |
+| `python -m tiim status` | Quick look: open trades, latest journal entries, halted or not |
+| `python -m tiim stop` | No new trades. Open trades keep their stop loss and take profit |
+| `python -m tiim resume` | Allow new trades again (also clears a drawdown halt) |
 | **Ctrl + C** in the `run` window | Stops the program. Open trades stay on TradeLocker with their SL/TP |
 
-When you restart `python -m tradingbot run`, it picks up where it left off: its memory and lessons are saved in
+When you restart `python -m tiim run`, it picks up where it left off: its memory and lessons are saved in
 `data/bot.db`. Don't delete that file.
 
 ## Step 7: Before going live

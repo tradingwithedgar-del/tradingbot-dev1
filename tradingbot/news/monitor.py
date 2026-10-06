@@ -141,14 +141,16 @@ class NewsMonitor:
         candidates.sort(key=lambda c: (c[0], -(abs(c[1]["news_age_min"] or 0))), reverse=True)
         return candidates[0][1]
 
-    def blackout(self, symbol: str, now: pd.Timestamp) -> str | None:
-        """Reason not to open a new trade right now, or None."""
+    def blackout(self, symbol: str, now: pd.Timestamp, earnings_strategy: bool = False) -> str | None:
+        """Reason not to open a new trade right now, or None. Earnings strategies may trade the days
+        before a release, but not in the last stretch before it (TIIM closes them before the release)."""
         for e in self.events:
             if symbol not in e.symbols:
                 continue
             mins = (now - e.time).total_seconds() / 60
             if e.kind == "earnings":
-                if -self.cfg.earnings_block_hours * 60 <= mins <= 60:
+                start = (self.cfg.flatten_before_earnings_minutes + 120) if earnings_strategy else self.cfg.earnings_block_hours * 60
+                if -start <= mins <= 60:
                     return f"{e.title} {'in' if mins < 0 else 'just released'} - no new trades"
             elif -self.cfg.pre_event_block_minutes <= mins <= self.cfg.post_event_block_minutes:
                 return f"high-impact news window: {e.title}"

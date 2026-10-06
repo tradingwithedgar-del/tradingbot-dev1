@@ -17,7 +17,8 @@ from .config import Settings
 from .journal import Journal
 from .learning import Learner
 from .risk import RiskManager
-from .strategies import Signal, Strategy, core_strategies, news_strategies
+from .learning import CANDIDATE
+from .strategies import Signal, Strategy, load_library
 
 log = logging.getLogger(__name__)
 CHART_PRE_BARS = 60
@@ -30,7 +31,7 @@ def _bar_row(ts: pd.Timestamp, bar: pd.Series) -> list:
 
 class Agent:
     def __init__(self, settings: Settings, broker: Broker, journal: Journal, rng: random.Random | None = None,
-                 news=None) -> None:
+                 news=None, earnings=None) -> None:
         self.s = settings
         self.broker = broker
         self.j = journal
@@ -38,8 +39,10 @@ class Agent:
         self.compliance = Compliance(settings.compliance)
         self.learner = Learner(journal, settings.learning, settings.risk, live=settings.is_live, rng=rng)
         self.news = news                      # NewsMonitor, or None (backtests)
-        self.news_strats: list[Strategy] = news_strategies()
-        self.core: list[Strategy] = core_strategies() + self.news_strats
+        self.earnings = earnings              # EarningsDesk, or None
+        # The strategy library: built-ins plus anything in my_strategies/ (minus disabled ones).
+        self.core: list[Strategy] = load_library(settings.db_path.parent, journal=journal)
+        self.news_strats: list[Strategy] = [st for st in self.core if "news" in st.needs]
         self.learner.apply_params(self.core)
         self.last_fast: dict[str, str] = {}
         self.j.clock = self.now
@@ -55,6 +58,9 @@ class Agent:
 
     def strategies(self) -> list[Strategy]:
         out = list(self.core)
+        if self.s.mode == "demo":
+            # each strategy is shadowed by a tweaked variant; the better version wins over time
+            out += [c for c in (self.learner.challenger_for(st) for st in self.core) if c is not None]
         if self.s.experiments_allowed:
             out += self.learner.experimental_strategies()
         return out
@@ -87,6 +93,15 @@ class Agent:
             return self.news.state(symbol, now)
         except Exception:  # pragma: no cover - defensive
             log.exception("news state failed")
+            return {}
+
+    def _earnings_state(self, symbol: str, now: pd.Timestamp) -> dict:
+        if not self.earnings:
+            return {}
+        try:
+            return self.earnings.context(symbol, now)
+        except Exception:
+            log.exception("earnings context failed for %s", symbol)
             return {}
 
     def run_cycle(self) -> None:
@@ -125,7 +140,8 @@ class Agent:
                 spread = quote.spread
             except Exception:  # pragma: no cover - network
                 quote, spread = None, 0.0
-            ctx = MarketContext(symbol, df, spread=spread, news=self._news_state(symbol, now_ts))
+            ctx = MarketContext(symbol, df, spread=spread, news=self._news_state(symbol, now_ts),
+                                earnings=self._earnings_state(symbol, now_ts))
             if live_clock:
                 try:
                     self.j.set(f"view:{self.j.mode}:{symbol}", chart_view(ctx))
@@ -144,7 +160,7 @@ class Agent:
         equity = self.broker.equity()
         peak = self._peak(equity)
         if not self.halted and peak > 0 and (peak - equity) / peak >= self.s.risk.max_drawdown_halt:
-            msg = f"HALTED: drawdown {(peak - equity) / peak:.1%} hit the {self.s.risk.max_drawdown_halt:.0%} limit. Review, then run `python -m tradingbot resume`."
+            msg = f"HALTED: drawdown {(peak - equity) / peak:.1%} hit the {self.s.risk.max_drawdown_halt:.0%} limit. Review, then run `python -m tiim resume`."
             self.j.set(f"halted:{self.j.mode}", msg)
             self.j.event("halt", msg, ts=self.now())
             log.error(msg)
@@ -185,7 +201,8 @@ class Agent:
                 quote = self.broker.get_quote(symbol)
             except Exception:  # pragma: no cover - network
                 continue
-            ctx = MarketContext(symbol, df, spread=quote.spread, news=self._news_state(symbol, now))
+            ctx = MarketContext(symbol, df, spread=quote.spread, news=self._news_state(symbol, now),
+                                earnings=self._earnings_state(symbol, now))
             self._look_for_trades(ctx, quote, only=self.news_strats)
 
     # --- open trade management -------------------------------------------------------
@@ -203,6 +220,8 @@ class Agent:
                 else:
                     continue
             self._update_excursions(t, ctx)
+            if self._news_guard(t, ctx, dec):
+                continue
             be_at = self.learner.breakeven.get(t["strategy"])
             if be_at and not dec.get("breakeven_moved") and (t["mfe_r"] or 0) >= be_at:
                 try:
@@ -212,6 +231,37 @@ class Agent:
                         self.j.event("manage", f"#{t['id']} {t['symbol']} stop moved to break-even at +{be_at}R", ts=self.now())
                 except Exception:  # pragma: no cover - network
                     log.exception("break-even move failed")
+
+    def _news_guard(self, t: dict, ctx: MarketContext, dec: dict) -> bool:
+        """Major news broke against an open trade: protect it. Returns True if the trade was closed."""
+        n = ctx.news or {}
+        if not self.news or n.get("news_state") != "breaking" or (n.get("news_impact") or 0) < self.s.news.guard_min_impact:
+            return False
+        against = (n.get("news_dir", 0) > 0) != (t["side"] == "buy") and n.get("news_dir", 0) != 0
+        title = n.get("news_title", "")
+        if not against or dec.get("news_guard") == title or (n.get("news_age_min") or 0) > 30:
+            return False
+        risk = abs(t["entry"] - t["stop"]) or 1e-12
+        cur_r = (ctx.close - t["entry"]) * (1 if t["side"] == "buy" else -1) / risk
+        dec["news_guard"] = title
+        action = "noted - stop left where it is (it already caps the loss)"
+        closed = False
+        try:
+            if cur_r >= self.s.news.guard_close_r:
+                self.broker.close_position(t["broker_id"])
+                dec["closed_by_agent"] = f"took profit at {cur_r:+.1f}R: major news against the trade"
+                action, closed = f"took the profit at {cur_r:+.1f}R", True
+            elif cur_r >= self.s.news.guard_breakeven_r and not dec.get("breakeven_moved"):
+                if self.broker.modify_stop(t["broker_id"], t["entry"]):
+                    dec["breakeven_moved"] = True
+                    action = f"stop moved to break-even (trade was {cur_r:+.1f}R)"
+        except Exception:
+            log.exception("news guard action failed for #%s", t["id"])
+            action = "tried to protect the trade but the broker call failed"
+        self.j.update_trade(t["id"], decision=dec)
+        self.j.event("manage", f"#{t['id']} {t['symbol']} {t['side']}: major news against the trade "
+                               f"('{title[:70]}') - {action}", {"trade_id": t["id"]}, ts=self.now())
+        return closed
 
     def _update_excursions(self, t: dict, ctx: MarketContext) -> None:
         bar = ctx.bar
@@ -304,6 +354,10 @@ class Agent:
                          {"trade_id": t["id"]}, ts=exit_time)
             return
         self.learner.record(t)
+        if CANDIDATE in t["strategy"]:
+            base = self._strategy(t["strategy"].split(CANDIDATE)[0])
+            if base is not None:
+                self.learner.judge_challenger(base)
         self.j.event(kind, f"#{t['id']} {t['strategy']} {t['symbol']} {t['side']} closed {r:+.2f}R ({outcome})"
                            + (f" - {', '.join(tags)}" if tags else ""), {"trade_id": t["id"]}, ts=exit_time)
         if t.get("experimental") and self.s.experiments_allowed:
@@ -356,7 +410,11 @@ class Agent:
     # --- entries -------------------------------------------------------------------------
     def _look_for_trades(self, ctx: MarketContext, quote, only: list[Strategy] | None = None) -> None:
         signals: list[Signal] = []
-        for strat in (only if only is not None else self.strategies()):
+        pool = self.strategies()
+        by_name = {st.name: st for st in pool}
+        for strat in (only if only is not None else pool):
+            if not strat.applies(ctx):
+                continue
             try:
                 sig = strat.generate(ctx)
             except Exception:
@@ -381,7 +439,7 @@ class Agent:
         real_symbols = {t["symbol"] for t in open_real}
 
         for sig in signals:
-            strat = next(s for s in self.strategies() if s.name == sig.strategy)
+            strat = by_name.get(sig.strategy) or next(st for st in (only or []) if st.name == sig.strategy)
             decision = self.learner.decide(strat, sig.features, ctx.symbol, self.s.live_approved_strategies)
             why = list(decision.reasons)
             action = decision.action
@@ -412,9 +470,14 @@ class Agent:
         if sig.symbol in real_symbols:
             return "already in a real trade on this symbol"
         if self.news:
-            reason = self.news.blackout(sig.symbol, pd.Timestamp(self.now()))
+            strat = next((st for st in self.core if st.name == sig.strategy.split(CANDIDATE)[0]), None)
+            reason = self.news.blackout(sig.symbol, pd.Timestamp(self.now()),
+                                        earnings_strategy=bool(strat and "earnings" in strat.needs))
             if reason:
                 return reason
+            if (sig.features.get("news_agree") == "against"
+                    and (sig.features.get("news_impact") or 0) >= self.s.news.guard_min_impact):
+                return f"major news points the other way: {sig.features.get('news_title', '')[:80]}"
         equity = self.broker.equity()
         peak = self._peak(equity)
         open_risk = sum(t["risk_pct"] or 0 for t in open_real)

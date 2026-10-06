@@ -1,6 +1,6 @@
 # PlexyTrade instrument names (TradeLocker)
 
-Use these exact names (capitals) in `BOT_SYMBOLS` in `.env`. Refresh with `python -m tradingbot symbols`.
+Use these exact names (capitals) in `BOT_SYMBOLS` in `.env`. Refresh with `python -m tiim symbols`.
 Listed October 2026.
 
 | Group | Symbols |

@@ -24,6 +24,10 @@ class SupplyDemandReversal(Strategy):
     """Buy a fresh demand zone / sell a fresh supply zone on a rejection candle."""
 
     name = "sd_reversal"
+    title = "Supply & demand reversal"
+    description = ("Marks zones where price based and then left sharply. When price returns to a fresh zone and "
+                   "a candle rejects it, trades the bounce. Stop beyond the zone.")
+    stricter = ("min_wick_ratio", 0.05)
 
     def __init__(self) -> None:
         super().__init__()
@@ -59,6 +63,10 @@ class DivergenceReversal(Strategy):
     """Regular RSI/MACD divergence at a swing, confirmed by a candle in the trade direction."""
 
     name = "divergence"
+    title = "RSI / MACD divergence"
+    description = ("Price makes a new high/low that RSI or MACD doesn't confirm (momentum fading). Trades the turn "
+                   "once a candle confirms it. Stop beyond the swing.")
+    stricter = ("min_osc_gap", 1.0)
 
     def __init__(self) -> None:
         super().__init__()
@@ -98,6 +106,10 @@ class StructureTrend(Strategy):
     """Trade pullbacks in an established HH/HL uptrend or LH/LL downtrend."""
 
     name = "structure_trend"
+    title = "Trend structure pullback"
+    description = ("In a HH/HL uptrend buys pullbacks to the last higher low; in a LH/LL downtrend sells pullbacks "
+                   "to the last lower high. Stop beyond that swing.")
+    stricter = ("max_pullback_atr", -0.1)
 
     def __init__(self) -> None:
         super().__init__()
