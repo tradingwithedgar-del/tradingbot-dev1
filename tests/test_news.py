@@ -86,7 +86,9 @@ def make_monitor(tmp_path, events=(), headlines=()):
     s.symbols = SYMS
     s.db_path = tmp_path / "n.db"
     j = Journal(s.db_path, mode="demo")
-    m = NewsMonitor(s, j, classifier=KeywordClassifier(), fetch_calendar_fn=lambda syms: list(events),
+    reader = KeywordClassifier()
+    reader.name = "claude"   # behave like the Claude reader so headlines can drive decisions
+    m = NewsMonitor(s, j, classifier=reader, fetch_calendar_fn=lambda syms: list(events),
                     fetch_headlines_fn=lambda feeds, age, now: list(headlines), load_earnings_fn=lambda syms, d: [])
     return m, j
 
@@ -171,3 +173,17 @@ def test_manual_close_is_not_blamed_on_strategy(tmp_path):
     cont = j.trades("shadow=1 AND strategy='structure_trend'")
     assert cont and cont[0]["decision"]["continues"] == tid
     assert np.isclose(cont[0]["stop"], entry - 0.01)
+
+
+def test_keyword_reader_never_puts_symbols_in_breaking_mode(tmp_path):
+    s = Settings()
+    s.symbols = SYMS
+    s.db_path = tmp_path / "k.db"
+    j = Journal(s.db_path, mode="demo")
+    war = Headline(NOW - pd.Timedelta(minutes=5), "Houthis claim missile attack on Saudi oil terminal", "Reuters", "")
+    m = NewsMonitor(s, j, classifier=KeywordClassifier(), fetch_calendar_fn=lambda syms: [],
+                    fetch_headlines_fn=lambda f, a, n: [war], load_earnings_fn=lambda syms, d: [])
+    m.refresh(NOW)
+    assert m.state("XTIUSD", NOW)["news_state"] == "clear" and not m.hot_symbols(NOW)
+    assert j.news(10, kind="headline")[0]["impact"] == 2          # still recorded for context
+    assert m.reset_headlines() == 1 and not j.news(10, kind="headline")

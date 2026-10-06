@@ -55,6 +55,21 @@ class NewsMonitor:
     def reader(self) -> str:
         return getattr(self.classifier, "name", "keywords")
 
+    @property
+    def breaking_threshold(self) -> int:
+        """Headlines only drive decisions when Claude reads them. The keyword reader is too crude:
+        its ratings are stored for context, but never put a symbol into 'breaking news' mode."""
+        return self.cfg.min_impact if self.reader == "claude" else 99
+
+    def reset_headlines(self) -> int:
+        with self.j._lock:
+            n = self.j.conn.execute("DELETE FROM news WHERE kind = 'headline'").rowcount
+            self.j.conn.commit()
+        self._seen.clear()
+        self.breaking.clear()
+        self.j.set("news_seen", [])
+        return n
+
     # --- refreshing ---------------------------------------------------------------------
     def refresh(self, now: pd.Timestamp) -> None:
         if self._last_calendar is None or now - self._last_calendar >= pd.Timedelta(minutes=self.cfg.calendar_refresh_minutes):
@@ -95,7 +110,7 @@ class NewsMonitor:
             self._seen.add(h.key)
             self._record(h.key, "headline", h.time, h.title, a.category, a.impact, a.effects, a.summary, h.source,
                          link=h.link, reader=a.source)
-            if a.impact >= self.cfg.min_impact and a.effects:
+            if a.impact >= self.breaking_threshold and a.effects:
                 self.breaking.append(BreakingItem(h.time, h.title, a.category, a.impact, a.effects, a.summary))
                 self.j.event("news", f"[impact {a.impact}] {h.title} -> "
                              + ", ".join(f"{s} {'up' if d > 0 else 'down'}" for s, d in a.effects.items()),

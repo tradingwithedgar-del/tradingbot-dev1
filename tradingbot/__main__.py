@@ -61,14 +61,18 @@ def cmd_news(args) -> None:
     j = Journal(s.db_path, mode=s.mode)
     mon = NewsMonitor(s, j)
     now = pd.Timestamp.now(tz="UTC")
+    if args.reset:
+        print(f"Cleared {mon.reset_headlines()} saved headlines - re-reading the latest ones now.")
     print(f"Reading headlines with: {mon.reader}" + ("" if mon.reader == "claude" else
-          "  (add ANTHROPIC_API_KEY to .env to let Claude read the news)"))
+          "\n  Keyword reader: headlines are shown for context only and don't drive trades."
+          "\n  Scheduled events still do. Add ANTHROPIC_API_KEY to .env to let Claude judge headlines."))
     mon.refresh(now)
     print("\nUpcoming high-impact events (UTC):")
     for e in mon.upcoming(now, hours=24 * 7)[:25]:
         print(f"  {e.time:%a %d %b %H:%M}  {e.title:<40} -> {', '.join(e.symbols)}")
     rows = [r for r in j.news(200, kind="headline") if (r["impact"] or 0) >= s.news.min_impact]
-    print(f"\nMarket-moving headlines in the last {s.news.max_headline_age_minutes} min:")
+    label = "Market-moving headlines" if mon.reader == "claude" else "Possibly relevant headlines (keyword reader)"
+    print(f"\n{label} in the last {s.news.max_headline_age_minutes} min:")
     for r in rows[:20]:
         eff = ", ".join(f"{k} {'up' if v > 0 else 'down'}" for k, v in r["effects"].items()) or "no clear direction"
         print(f"  [{r['impact']}] {r['ts'][11:16]} {r['title'][:90]}\n        -> {eff}")
@@ -225,7 +229,9 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("run").set_defaults(fn=cmd_run)
     sub.add_parser("strategies", help="list TIIM's strategy library").set_defaults(fn=cmd_strategies)
-    sub.add_parser("news", help="check the news feeds, calendar and how headlines are read").set_defaults(fn=cmd_news)
+    nw = sub.add_parser("news", help="check the news feeds, calendar and how headlines are read")
+    nw.add_argument("--reset", action="store_true", help="forget saved headlines and re-read them")
+    nw.set_defaults(fn=cmd_news)
     sy = sub.add_parser("symbols", help="log in and list instrument names")
     sy.add_argument("--search", default="")
     sy.set_defaults(fn=cmd_symbols)
