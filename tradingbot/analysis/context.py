@@ -18,6 +18,7 @@ class MarketContext:
     symbol: str
     df: pd.DataFrame                 # closed bars only, oldest first
     spread: float = 0.0
+    news: dict = field(default_factory=dict)   # news state from NewsMonitor (empty in backtests)
     _cache: dict = field(default_factory=dict, repr=False)
 
     # --- basics -----------------------------------------------------------
@@ -103,4 +104,9 @@ class MarketContext:
             "atr": self.atr_now,
             "spread": self.spread,
             "weekday": int(self.time.weekday()),
+            "news_state": self.news.get("news_state", "clear"),
+            "news_kind": self.news.get("news_kind", "none"),
+            "news_impact": self.news.get("news_impact", 0),
+            "news_dir": self.news.get("news_dir", 0),
+            "news_title": self.news.get("news_title", ""),
         }

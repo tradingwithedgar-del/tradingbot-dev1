@@ -77,6 +77,27 @@ class LearningConfig:
 
 
 @dataclass
+class NewsConfig:
+    """News awareness: scheduled events (economic calendar, earnings) and breaking headlines."""
+    enabled: bool = field(default_factory=lambda: os.getenv("NEWS_ENABLED", "1") not in {"0", "false", "no", "NO"})
+    # Claude reads headlines and decides which symbols they move. Without ANTHROPIC_API_KEY a
+    # simple keyword reader is used instead.
+    model: str = field(default_factory=lambda: os.getenv("NEWS_MODEL", "claude-opus-5-5"))
+    headline_poll_seconds: int = 90
+    calendar_refresh_minutes: int = 60
+    max_headline_age_minutes: int = 120
+    max_headlines_per_call: int = 25
+    min_impact: int = 2                    # 0-3; headlines below this are ignored for trading
+    pre_event_block_minutes: int = 15      # no new trades this long before a high-impact release
+    post_event_block_minutes: int = 5      # ...nor right after it (spreads explode)
+    post_event_window_minutes: int = 60    # how long a release/headline counts as "news is driving price"
+    earnings_block_hours: int = 20         # no new stock trades this long before earnings
+    flatten_before_earnings_minutes: int = 45  # close open stock trades before earnings
+    fast_timeframe: str = "5m"             # timeframe used to react while news is hot
+    feeds: list[str] = field(default_factory=lambda: [f for f in os.getenv("NEWS_FEEDS", "").split(",") if f.strip()])
+
+
+@dataclass
 class Settings:
     mode: str = field(default_factory=lambda: os.getenv("BOT_MODE", "demo").lower())
     symbols: list[str] = field(
@@ -89,6 +110,7 @@ class Settings:
     risk: RiskConfig = field(default_factory=RiskConfig)
     compliance: ComplianceConfig = field(default_factory=ComplianceConfig)
     learning: LearningConfig = field(default_factory=LearningConfig)
+    news: NewsConfig = field(default_factory=NewsConfig)
     # Strategies the human has explicitly approved for the live account.
     live_approved_strategies: list[str] = field(
         default_factory=lambda: [s.strip() for s in os.getenv("LIVE_APPROVED_STRATEGIES", "sd_reversal,divergence,structure_trend").split(",") if s.strip()]

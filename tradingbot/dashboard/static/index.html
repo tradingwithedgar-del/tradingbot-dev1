@@ -89,6 +89,23 @@ tr.click:hover { background: var(--grid); }
   <div class="alert" id="halt" style="display:none"></div>
   <section class="card"><div class="tiles" id="tiles"></div></section>
 
+  <section class="card" id="viewCard">
+    <div class="controls" style="justify-content:space-between">
+      <div><h2>What the agent sees</h2><p class="sub">Its zones, swing structure, indicators and open trades on the latest closed bars. Updates every bar close. To close a trade, close it in TradeLocker. The agent notices and records it as closed by you.</p></div>
+      <div class="controls">
+        <label>Symbol <select id="viewSym"></select></label>
+        <label><input type="checkbox" id="showSwings" checked> swings</label>
+        <label><input type="checkbox" id="showZones" checked> zones</label>
+        <label><input type="checkbox" id="showVirtual"> virtual trades</label>
+      </div>
+    </div>
+    <div class="kv" id="viewRead" style="margin-bottom:8px"></div>
+    <div class="chart" id="viewChart" style="height:640px"></div>
+  </section>
+
+  <section class="card half"><h2>Upcoming news events</h2><p class="sub">High-impact releases and earnings the agent is watching. No new trades from 15 min before to 5 min after</p><div class="table-wrap" style="max-height:340px"><table id="eventsTable"></table></div></section>
+  <section class="card half"><h2>Market-moving headlines</h2><p class="sub">Headlines rated impact 2+ and what the agent expects them to move</p><ul class="events" id="headlines" style="max-height:340px"></ul></section>
+
   <section class="card half"><h2>Equity</h2><p class="sub">Account equity at every bar the agent processed</p><div class="chart" id="equityChart"></div></section>
   <section class="card half"><h2>Drawdown from peak</h2><p class="sub">Risk scales down as this grows; the agent halts at the configured limit</p><div class="chart" id="ddChart"></div></section>
 
@@ -106,7 +123,8 @@ tr.click:hover { background: var(--grid); }
       <div class="controls">
         <label>Condition <select id="dim">
           <option>regime</option><option>session</option><option>structure</option><option>bias</option>
-          <option>volatility</option><option>symbol</option><option>rsi_zone</option><option>confluence</option></select></label>
+          <option>volatility</option><option>symbol</option><option>rsi_zone</option><option>confluence</option>
+          <option>news_state</option><option>news_kind</option><option>news_agree</option></select></label>
         <label>Trades <select id="dimKind"><option value="all">real + shadow</option><option value="real">real</option><option value="shadow">shadow</option></select></label>
       </div>
     </div>
@@ -165,6 +183,7 @@ async function init() {
   const modes = await get('/api/modes');
   $('mode').innerHTML = modes.map(m => `<option>${m}</option>`).join('') || '<option>demo</option>';
   MODE = $('mode').value;
+  ['viewSym','showSwings','showZones','showVirtual'].forEach(id => $(id).addEventListener('change', () => refreshView()));
   ['mode','kind','dim','dimKind'].forEach(id => $(id).addEventListener('change', () => { MODE = $('mode').value; refresh(); }));
   $('dClose').onclick = () => { $('detail').style.display = 'none'; };
   $('theme').onclick = () => {
@@ -188,6 +207,97 @@ async function refresh() {
   strats.forEach(s => seriesColor(s.name));
   renderSummary(sum); renderEquity(eq); renderStrategies(strats, trades); renderHeat(heat);
   renderTags(pmort); renderEvents(evs); renderTrades(trades);
+  await refreshSymbols();
+  refreshView();
+  get('/api/news').then(renderNews).catch(() => {});
+}
+
+async function refreshSymbols() {
+  const syms = await get(`/api/symbols?mode=${encodeURIComponent(MODE)}`);
+  const cur = $('viewSym').value;
+  $('viewSym').innerHTML = syms.map(x => `<option>${esc(x)}</option>`).join('');
+  if (syms.includes(cur)) $('viewSym').value = cur;
+  $('viewCard').style.display = syms.length ? 'block' : 'none';
+}
+
+async function refreshView() {
+  const sym = $('viewSym').value;
+  if (!sym) return;
+  let v;
+  try { v = await get(`/api/view?mode=${encodeURIComponent(MODE)}&symbol=${encodeURIComponent(sym)}`); } catch { return; }
+  const r = v.read || {}, n = r.news || {};
+  const newsTxt = n.news_state && n.news_state !== 'clear'
+    ? `${n.news_state.replace('_', ' ')} · ${n.news_kind}${n.news_dir ? (n.news_dir > 0 ? ' (bullish)' : ' (bearish)') : ''} · ${esc(n.news_title || '')}` : 'clear';
+  $('viewRead').innerHTML = [['Updated', v.updated.slice(0, 16).replace('T', ' ') + ' UTC'], ['Structure', r.trend], ['HTF bias', r.bias],
+    ['Regime', r.regime], ['RSI', r.rsi == null ? '—' : r.rsi.toFixed(1)], ['News', newsTxt]]
+    .map(([k, x]) => `<div><span>${k}:</span> ${x}</div>`).join('');
+  const x = v.t, last = x[x.length - 1];
+  const traces = [
+    {type: 'candlestick', x, open: v.open, high: v.high, low: v.low, close: v.close, name: 'price', xaxis: 'x', yaxis: 'y',
+     increasing: {line: {color: css('--s3'), width: 1}}, decreasing: {line: {color: css('--s8'), width: 1}}},
+    {type: 'scatter', mode: 'lines', x, y: v.ema50, name: 'EMA 50', line: {color: css('--s1'), width: 1.5}, xaxis: 'x', yaxis: 'y'},
+    {type: 'scatter', mode: 'lines', x, y: v.ema200, name: 'EMA 200', line: {color: css('--s7'), width: 1.5}, xaxis: 'x', yaxis: 'y'},
+    {type: 'scatter', mode: 'lines', x, y: v.rsi, name: 'RSI 14', line: {color: css('--s4'), width: 1.5}, xaxis: 'x', yaxis: 'y2'},
+    {type: 'bar', x, y: v.macd_hist, name: 'MACD hist', xaxis: 'x', yaxis: 'y3',
+     marker: {color: v.macd_hist.map(h => (h || 0) >= 0 ? css('--s3') : css('--s8'))}},
+  ];
+  const shapes = [], ann = [];
+  if ($('showZones').checked) v.zones.forEach(z => {
+    const c = z.kind === 'demand' ? css('--s1') : css('--s2');
+    shapes.push({type: 'rect', xref: 'x', yref: 'y', x0: z.from, x1: last, y0: z.bottom, y1: z.top, line: {width: 1, color: c},
+      fillcolor: c + (z.fresh ? '40' : '1f'), layer: 'below'});
+    ann.push({xref: 'x', yref: 'y', x: last, y: z.kind === 'demand' ? z.bottom : z.top, xanchor: 'left', showarrow: false,
+      text: `${z.kind}${z.fresh ? ' (fresh)' : ` (${z.touches}x)`}`, font: {size: 10, color: css('--ink-2')}});
+  });
+  if ($('showSwings').checked) {
+    const sw = v.swings.filter(s => s.label);
+    traces.push({type: 'scatter', mode: 'text', x: sw.map(s => s.t), y: sw.map(s => s.price), text: sw.map(s => s.label),
+      textposition: sw.map(s => s.kind === 'H' ? 'top center' : 'bottom center'), textfont: {size: 10, color: css('--ink')},
+      name: 'swings', hoverinfo: 'skip', xaxis: 'x', yaxis: 'y'});
+  }
+  v.divergences.forEach(d => shapes.push({type: 'line', xref: 'x', yref: 'y', x0: d.t1, x1: d.t2, y0: d.p1, y1: d.p2,
+    line: {color: d.kind.endsWith('bull') ? css('--s1') : css('--s2'), width: 2, dash: 'dot'}}));
+  const divLabels = {};
+  v.divergences.forEach(d => {
+    const k = d.t2 + d.kind;
+    if (!divLabels[k]) divLabels[k] = {d, osc: []};
+    divLabels[k].osc.push(d.osc.toUpperCase());
+  });
+  Object.values(divLabels).forEach(({d, osc}) => ann.push({xref: 'x', yref: 'y', x: d.t2, y: d.p2,
+    text: `${d.kind.replace('_', ' ')} div (${osc.join('+')})`, showarrow: true, arrowhead: 0,
+    ay: d.kind.endsWith('bull') ? 34 : -34, font: {size: 10, color: css('--ink-2')}}));
+  v.trades.filter(t => !t.shadow || $('showVirtual').checked).forEach(t => {
+    const x0 = t.opened_at < x[0] ? x[0] : t.opened_at, x1 = t.closed_at || last;
+    const tag = t.shadow ? 'virtual ' : '';
+    [['entry', t.entry, css('--s1'), 'solid'], ['stop', t.stop, css('--critical'), 'dot'], ['target', t.take_profit, css('--good'), 'dot']]
+      .forEach(([nm, y, c, dash]) => shapes.push({type: 'line', xref: 'x', yref: 'y', x0, x1, y0: y, y1: y, line: {color: c, width: t.status === 'open' ? 2 : 1, dash}}));
+    ann.push({xref: 'x', yref: 'y', x: x0, y: t.entry, xanchor: 'right', showarrow: false,
+      text: `#${t.id} ${tag}${t.side} ${t.strategy}${t.status === 'open' ? ' (open)' : ` ${fmtR(t.r_multiple)}`}`,
+      font: {size: 10, color: css('--ink')}});
+  });
+  shapes.push({type: 'line', xref: 'paper', yref: 'y2', x0: 0, x1: 1, y0: 70, y1: 70, line: {color: css('--axis'), width: 1, dash: 'dot'}});
+  shapes.push({type: 'line', xref: 'paper', yref: 'y2', x0: 0, x1: 1, y0: 30, y1: 30, line: {color: css('--axis'), width: 1, dash: 'dot'}});
+  const ax = {gridcolor: css('--grid'), linecolor: css('--axis'), zeroline: false};
+  Plotly.react('viewChart', traces, layout({
+    showlegend: true, legend: {orientation: 'h', y: 1.04, x: 0}, hovermode: 'x', margin: {l: 64, r: 110, t: 24, b: 30},
+    xaxis: Object.assign({}, ax, {rangeslider: {visible: false}, anchor: 'y3'}),
+    yaxis: Object.assign({}, ax, {domain: [0.42, 1], title: {text: sym}}),
+    yaxis2: Object.assign({}, ax, {domain: [0.22, 0.38], range: [0, 100], title: {text: 'RSI'}}),
+    yaxis3: Object.assign({}, ax, {domain: [0, 0.18], title: {text: 'MACD'}}),
+    shapes, annotations: ann,
+  }), cfg);
+}
+
+function renderNews(nw) {
+  const fmtT = (ts) => ts.slice(5, 16).replace('T', ' ');
+  $('eventsTable').innerHTML = `<thead><tr><th>Time (UTC)</th><th>Event</th><th>Impact</th><th>Affects</th></tr></thead><tbody>` +
+    (nw.upcoming.map(e => `<tr><td>${esc(fmtT(e.ts))}</td><td>${esc(e.title)}</td><td>${'●'.repeat(e.impact || 0)}</td>
+      <td style="white-space:normal">${Object.keys(e.effects || {}).map(s => `<span class="tag">${esc(s)}</span>`).join('')}</td></tr>`).join('')
+     || '<tr><td colspan="4" class="empty">No high-impact events loaded yet</td></tr>') + '</tbody>';
+  $('headlines').innerHTML = nw.headlines.map(h => `<li><span class="ts">${esc(fmtT(h.ts))}</span><span class="kind">impact ${h.impact} · ${esc(h.category)}</span>
+    ${h.link ? `<a href="${esc(h.link)}" target="_blank" rel="noopener" style="color:inherit">${esc(h.title)}</a>` : esc(h.title)}
+    <div>${Object.entries(h.effects || {}).map(([s2, d]) => `<span class="tag">${esc(s2)} ${d > 0 ? '▲ up' : '▼ down'}</span>`).join('')}</div></li>`).join('')
+    || '<li class="muted">No market-moving headlines yet</li>';
 }
 
 function renderSummary(s) {

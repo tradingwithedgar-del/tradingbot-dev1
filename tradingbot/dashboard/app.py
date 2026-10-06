@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from pathlib import Path
 
+import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
@@ -12,7 +13,8 @@ from ..journal import Journal
 from ..learning import EdgeStat
 
 STATIC = Path(__file__).parent / "static"
-DIMENSIONS = ["regime", "session", "structure", "bias", "volatility", "symbol", "rsi_zone", "confluence"]
+DIMENSIONS = ["regime", "session", "structure", "bias", "volatility", "symbol", "rsi_zone", "confluence",
+              "news_state", "news_kind", "news_agree"]
 
 
 def stats_for(trades: list[dict]) -> dict:
@@ -183,6 +185,35 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             tags = (t.get("postmortem") or {}).get("tags", [])
             (loss_tags if (t["r_multiple"] or 0) < 0 else win_tags).update(tags)
         return {"losses": loss_tags.most_common(), "wins": win_tags.most_common()}
+
+    @app.get("/api/symbols")
+    def symbols(mode: str):
+        rows = j.conn.execute("SELECT key FROM kv WHERE key LIKE ?", (f"view:{mode}:%",)).fetchall()
+        found = [r[0].split(":", 2)[2] for r in rows]
+        order = {sym: i for i, sym in enumerate(settings.symbols)}
+        return sorted(found, key=lambda x: order.get(x, 999))
+
+    @app.get("/api/view")
+    def view(mode: str, symbol: str):
+        v = j.get(f"view:{mode}:{symbol}")
+        if not v:
+            raise HTTPException(404, "no chart yet for this symbol - it appears after the next bar closes")
+        start = v["t"][0] if v["t"] else ""
+        keep = ["id", "shadow", "side", "status", "strategy", "opened_at", "closed_at", "entry", "stop", "take_profit",
+                "exit_price", "r_multiple", "reason"]
+        trades = j.trades("mode=? AND symbol=? AND (status='open' OR closed_at >= ?)", (mode, symbol, start),
+                          order="id DESC", limit=40)
+        v["trades"] = [{k: t.get(k) for k in keep} | {"stop_now": (t.get("decision") or {}).get("breakeven_moved")}
+                       for t in trades if not t["shadow"] or t["status"] == "open"]
+        return v
+
+    @app.get("/api/news")
+    def news(limit: int = 60):
+        now = pd.Timestamp.now(tz="UTC")
+        upcoming = [n for n in j.news(300, kind="event", since=(now - pd.Timedelta(hours=2)).isoformat())]
+        upcoming.sort(key=lambda n: n["ts"])
+        heads = [n for n in j.news(limit * 3, kind="headline") if (n["impact"] or 0) >= 2][:limit]
+        return {"upcoming": upcoming[:40], "headlines": heads}
 
     @app.get("/api/events")
     def events(mode: str, limit: int = 200):

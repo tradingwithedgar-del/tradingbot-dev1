@@ -25,13 +25,16 @@ from .journal import Journal
 from .strategies import ExperimentalStrategy, Genome, Strategy, mutate, random_genome
 
 CONDITION_KEYS = ["regime", "trend_strength", "volatility", "structure", "bias", "session", "rsi_zone",
-                  "symbol", "with_structure", "zone_fresh", "divergence", "confluence"]
+                  "symbol", "with_structure", "zone_fresh", "divergence", "confluence",
+                  "news_state", "news_kind", "news_agree"]
 
 # Which parameter makes a strategy more selective, and in which direction.
 STRICTER = {
     "sd_reversal": ("min_wick_ratio", +0.05),
     "divergence": ("min_osc_gap", +1.0),
     "structure_trend": ("max_pullback_atr", -0.1),
+    "news_momentum": ("min_impulse_atr", +0.1),
+    "news_fade": ("min_spike_atr", +0.25),
 }
 
 

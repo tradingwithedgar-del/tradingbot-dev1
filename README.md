@@ -119,12 +119,35 @@ Every time a bar closes, for each symbol the agent:
 
 ---
 
+## 3b. News awareness
+
+* **Scheduled events:** the weekly economic calendar (CPI, Fed/FOMC, jobs, GDP, PCE, ISM, oil inventories) and
+  earnings dates for your stocks (`FINNHUB_API_KEY`, or `data/earnings.json`). No new trades from 15 min before
+  to 5 min after a high-impact release, no new stock trades in the 20 h before earnings, and open stock trades are
+  closed 45 min before earnings.
+* **Breaking headlines:** public news feeds checked every 90 s. With `ANTHROPIC_API_KEY` set, Claude rates
+  each headline (impact 0–3) and says which of your symbols it should push up or down. Without a key a
+  keyword reader is used.
+* **Trading the news (demo only until you approve them):**
+  * `news_momentum`: after high-impact news, rides a strong impulse candle if it agrees with the headline.
+  * `news_fade`: trades the snap-back when a news spike over-extends and gets rejected.
+  While news is hot, these also check 5-minute bars, so the agent reacts within minutes.
+* **Learning:** every trade records the news situation (`news_state`, `news_kind`, `news_agree`), so the
+  agent learns which kinds of news are worth trading on which symbols, and blocks the ones that lose.
+* Headlines reach public feeds minutes after the fact. The edge is in reading the reaction and its
+  follow-through, not in being first. `python -m tradingbot news` shows what the agent currently sees.
+
 ## 4. Dashboard
 
 ```bash
 python -m tradingbot dashboard                 # demo/live journal, http://127.0.0.1:8000
 python -m tradingbot dashboard --db data/backtest.db
 ```
+* **What the agent sees:** per-symbol chart with its supply/demand zones, HH/HL/LH/LL labels, EMA 50/200,
+  RSI, MACD, divergences, open trades (entry/stop/target), and its read of trend, bias, regime and news
+* Upcoming high-impact events and market-moving headlines
+* **You can close any trade yourself in TradeLocker.** The agent records it as "closed by you", doesn't blame
+  the strategy for your decision, and keeps following the original plan virtually to show what would have happened
 * Survival status (Proving itself / Surviving / Thriving / At risk / Termination zone)
 * Equity, drawdown, return, win rate, expectancy (R), profit factor, open risk
 * R per trade and cumulative R per strategy

@@ -24,6 +24,11 @@ CREATE INDEX IF NOT EXISTS trades_status ON trades(status);
 CREATE TABLE IF NOT EXISTS equity (ts TEXT, mode TEXT, balance REAL, equity REAL, peak REAL, drawdown REAL);
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, mode TEXT, kind TEXT, message TEXT, data TEXT);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS news (
+    key TEXT PRIMARY KEY, ts TEXT, kind TEXT, title TEXT, category TEXT, impact INTEGER,
+    effects TEXT, summary TEXT, source TEXT, link TEXT, reader TEXT
+);
+CREATE INDEX IF NOT EXISTS news_ts ON news(ts);
 """
 
 JSON_COLS = {"features", "decision", "postmortem", "chart", "watch"}
@@ -133,3 +138,22 @@ class Journal:
         with self._lock:
             rows = self.conn.execute("SELECT * FROM equity WHERE mode = ? ORDER BY ts", (mode or self.mode,)).fetchall()
         return [dict(r) for r in rows]
+
+    def news(self, limit: int = 100, kind: str | None = None, since: str | None = None) -> list[dict]:
+        sql, params = "SELECT * FROM news WHERE 1=1", []
+        if kind:
+            sql += " AND kind = ?"
+            params.append(kind)
+        if since:
+            sql += " AND ts >= ?"
+            params.append(since)
+        sql += " ORDER BY ts DESC LIMIT ?"
+        params.append(limit)
+        with self._lock:
+            rows = self.conn.execute(sql, params).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["effects"] = json.loads(d["effects"]) if d["effects"] else {}
+            out.append(d)
+        return out

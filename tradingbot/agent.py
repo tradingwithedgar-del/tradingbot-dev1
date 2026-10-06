@@ -10,13 +10,14 @@ import pandas as pd
 
 from . import postmortem as pm
 from .analysis.context import MarketContext
+from .analysis.view import chart_view
 from .broker.base import TIMEFRAME_SECONDS, Broker
 from .compliance import Compliance
 from .config import Settings
 from .journal import Journal
 from .learning import Learner
 from .risk import RiskManager
-from .strategies import Signal, Strategy, core_strategies
+from .strategies import Signal, Strategy, core_strategies, news_strategies
 
 log = logging.getLogger(__name__)
 CHART_PRE_BARS = 60
@@ -28,15 +29,19 @@ def _bar_row(ts: pd.Timestamp, bar: pd.Series) -> list:
 
 
 class Agent:
-    def __init__(self, settings: Settings, broker: Broker, journal: Journal, rng: random.Random | None = None) -> None:
+    def __init__(self, settings: Settings, broker: Broker, journal: Journal, rng: random.Random | None = None,
+                 news=None) -> None:
         self.s = settings
         self.broker = broker
         self.j = journal
         self.risk = RiskManager(settings.risk)
         self.compliance = Compliance(settings.compliance)
         self.learner = Learner(journal, settings.learning, settings.risk, live=settings.is_live, rng=rng)
-        self.core: list[Strategy] = core_strategies()
+        self.news = news                      # NewsMonitor, or None (backtests)
+        self.news_strats: list[Strategy] = news_strategies()
+        self.core: list[Strategy] = core_strategies() + self.news_strats
         self.learner.apply_params(self.core)
+        self.last_fast: dict[str, str] = {}
         self.j.clock = self.now
         self.last_bar: dict[str, str] = journal.get(f"last_bar:{journal.mode}", {}) or {}
         if settings.experiments_allowed:
@@ -75,7 +80,23 @@ class Agent:
         return float(d["equity"])
 
     # --- main cycle -------------------------------------------------------------
+    def _news_state(self, symbol: str, now: pd.Timestamp) -> dict:
+        if not self.news:
+            return {}
+        try:
+            return self.news.state(symbol, now)
+        except Exception:  # pragma: no cover - defensive
+            log.exception("news state failed")
+            return {}
+
     def run_cycle(self) -> None:
+        now_ts = pd.Timestamp(self.now())
+        if self.news:
+            try:
+                self.news.refresh(now_ts)
+            except Exception:
+                log.exception("news refresh failed")
+            self._flatten_for_news(now_ts)
         self._sync_closed_positions()
         equity, balance = self.broker.equity(), self.broker.balance()
         peak = self._peak(equity)
@@ -104,13 +125,20 @@ class Agent:
                 spread = quote.spread
             except Exception:  # pragma: no cover - network
                 quote, spread = None, 0.0
-            ctx = MarketContext(symbol, df, spread=spread)
+            ctx = MarketContext(symbol, df, spread=spread, news=self._news_state(symbol, now_ts))
+            if live_clock:
+                try:
+                    self.j.set(f"view:{self.j.mode}:{symbol}", chart_view(ctx))
+                except Exception:
+                    log.exception("chart view failed for %s", symbol)
             self._manage_open(ctx)
             self._advance_shadows(ctx)
             self._advance_watchers(ctx)
             if quote is not None:
                 self._look_for_trades(ctx, quote)
         self.j.set(f"last_bar:{self.j.mode}", self.last_bar)
+        if self.news and live_clock:
+            self._fast_news_pass(now_ts)
 
         # drawdown halt
         equity = self.broker.equity()
@@ -120,6 +148,45 @@ class Agent:
             self.j.set(f"halted:{self.j.mode}", msg)
             self.j.event("halt", msg, ts=self.now())
             log.error(msg)
+
+    # --- news handling -------------------------------------------------------------------
+    def _flatten_for_news(self, now: pd.Timestamp) -> None:
+        """Close open stock trades shortly before earnings (gap risk is not something to gamble on)."""
+        for t in self.j.open_trades(shadow=False):
+            reason = self.news.must_flatten(t["symbol"], now)
+            if not reason:
+                continue
+            dec = t.get("decision") or {}
+            if dec.get("closed_by_agent"):
+                continue
+            try:
+                self.broker.close_position(t["broker_id"])
+                dec["closed_by_agent"] = reason
+                self.j.update_trade(t["id"], decision=dec)
+                self.j.event("manage", f"#{t['id']} {t['symbol']} {reason}", ts=self.now())
+            except Exception:
+                log.exception("could not close #%s before earnings", t["id"])
+
+    def _fast_news_pass(self, now: pd.Timestamp) -> None:
+        """While news is driving a symbol, check the news strategies on 5-minute bars between 15m closes."""
+        for symbol in self.news.hot_symbols(now):
+            try:
+                df = self.broker.get_bars(symbol, self.s.news.fast_timeframe, 300)
+            except Exception as e:  # pragma: no cover - network
+                log.warning("fast bars for %s failed: %s", symbol, e)
+                continue
+            if len(df) < 60:
+                continue
+            key = df.index[-1].isoformat()
+            if self.last_fast.get(symbol) == key:
+                continue
+            self.last_fast[symbol] = key
+            try:
+                quote = self.broker.get_quote(symbol)
+            except Exception:  # pragma: no cover - network
+                continue
+            ctx = MarketContext(symbol, df, spread=quote.spread, news=self._news_state(symbol, now))
+            self._look_for_trades(ctx, quote, only=self.news_strats)
 
     # --- open trade management -------------------------------------------------------
     def _manage_open(self, ctx: MarketContext) -> None:
@@ -177,23 +244,66 @@ class Agent:
             else:
                 r = (info.exit_price - entry) * direction / risk_dist
                 pnl = r * (t["risk_amount"] or 0.0)
-            self._close_trade(t, info.exit_price, info.exit_time.isoformat(), pnl, r, entry=entry, estimated=info.estimated)
+            reason = self._close_reason(t, info.exit_price, entry, info.estimated)
+            self._close_trade(t, info.exit_price, info.exit_time.isoformat(), pnl, r, entry=entry, estimated=info.estimated,
+                              reason=reason)
+
+    @staticmethod
+    def _close_reason(t: dict, exit_price: float, entry: float, estimated: bool) -> str:
+        """target | stop | breakeven | agent | manual (you closed it in TradeLocker)."""
+        dec = t.get("decision") or {}
+        if dec.get("closed_by_agent"):
+            return "agent"
+        if estimated:
+            return "stop" if abs(exit_price - t["stop"]) < abs(exit_price - t["take_profit"]) else "target"
+        tol = 0.15 * (abs(entry - t["stop"]) or 1e-12)
+        if abs(exit_price - t["take_profit"]) <= tol:
+            return "target"
+        if abs(exit_price - t["stop"]) <= tol:
+            return "stop"
+        if dec.get("breakeven_moved") and abs(exit_price - entry) <= tol:
+            return "breakeven"
+        return "manual"
 
     def _close_trade(self, t: dict, exit_price: float, exit_time: str, pnl: float, r: float, entry: float | None = None,
-                     estimated: bool = False) -> None:
+                     estimated: bool = False, reason: str = "") -> None:
         t.update(exit_price=exit_price, r_multiple=r, pnl=pnl)
         if entry is not None:
             t["entry"] = entry
         outcome = "win" if r > 0.05 else ("loss" if r < -0.05 else "breakeven")
+        manual = reason == "manual"
         tags = pm.initial_tags(t)
+        if manual:
+            tags = ["closed_manually"] + tags
+        elif reason == "agent":
+            tags = ["closed_by_agent"] + tags
         atr = float((t.get("features") or {}).get("atr") or 0.0)
-        watch = pm.new_watch(t, atr)
+        watch = None if manual else pm.new_watch(t, atr)
+        dec = t.get("decision") or {}
+        if reason:
+            dec["close_reason"] = reason
         self.j.update_trade(t["id"], status="closed", closed_at=exit_time, exit_price=exit_price, pnl=pnl,
                             r_multiple=r, outcome=outcome, entry=t["entry"], exit_estimated=int(estimated),
-                            postmortem={"tags": tags, "notes": pm.explain(tags), "final": False}, watch=watch)
+                            postmortem={"tags": tags, "notes": pm.explain(tags), "final": manual}, watch=watch,
+                            decision=dec)
         t["outcome"] = outcome
-        self.learner.record(t)
         kind = "shadow" if t.get("shadow") else "trade"
+        if manual:
+            # Your decision, not the strategy's: keep following the original plan virtually so the
+            # strategy is judged on what its trade would have done.
+            sid = self.j.open_trade(
+                shadow=1, symbol=t["symbol"], strategy=t["strategy"], experimental=t.get("experimental", 0),
+                side=t["side"], opened_at=t["opened_at"], entry=t["entry"], stop=t["stop"],
+                take_profit=t["take_profit"], qty=0, risk_amount=0, risk_pct=0, reason=t.get("reason", ""),
+                features=t.get("features") or {}, chart=t.get("chart") or [], mfe_r=t.get("mfe_r") or 0,
+                mae_r=t.get("mae_r") or 0,
+                decision={"action": "shadow", "why": [f"continued virtually after you closed real trade #{t['id']}"],
+                          "continues": t["id"]})
+            self.j.event("trade", f"#{t['id']} {t['symbol']} {t['side']} closed by you at {r:+.2f}R - "
+                                  f"following the original plan virtually as #{sid} to see what it would have done",
+                         {"trade_id": t["id"]}, ts=exit_time)
+            return
+        self.learner.record(t)
         self.j.event(kind, f"#{t['id']} {t['strategy']} {t['symbol']} {t['side']} closed {r:+.2f}R ({outcome})"
                            + (f" - {', '.join(tags)}" if tags else ""), {"trade_id": t["id"]}, ts=exit_time)
         if t.get("experimental") and self.s.experiments_allowed:
@@ -244,9 +354,9 @@ class Agent:
                 self.learner.tune(strat, recent)
 
     # --- entries -------------------------------------------------------------------------
-    def _look_for_trades(self, ctx: MarketContext, quote) -> None:
+    def _look_for_trades(self, ctx: MarketContext, quote, only: list[Strategy] | None = None) -> None:
         signals: list[Signal] = []
-        for strat in self.strategies():
+        for strat in (only if only is not None else self.strategies()):
             try:
                 sig = strat.generate(ctx)
             except Exception:
@@ -261,6 +371,8 @@ class Agent:
         for sig in signals:
             sig.features["confluence"] = sum(1 for o in signals if o.side == sig.side and o.strategy in core_names)
             sig.features["symbol"] = ctx.symbol
+            nd = int((ctx.news or {}).get("news_dir", 0) or 0)
+            sig.features["news_agree"] = "none" if not nd else ("with" if (nd > 0) == (sig.side == "buy") else "against")
         # Strongest confluence first, so the best setup gets the real-money slot.
         signals.sort(key=lambda s: (-s.features["confluence"], s.experimental))
 
@@ -299,6 +411,10 @@ class Agent:
             return "STOP file present - no new real entries"
         if sig.symbol in real_symbols:
             return "already in a real trade on this symbol"
+        if self.news:
+            reason = self.news.blackout(sig.symbol, pd.Timestamp(self.now()))
+            if reason:
+                return reason
         equity = self.broker.equity()
         peak = self._peak(equity)
         open_risk = sum(t["risk_pct"] or 0 for t in open_real)

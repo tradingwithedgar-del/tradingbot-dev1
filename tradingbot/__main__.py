@@ -2,6 +2,7 @@
 
     python -m tradingbot symbols             # log in and list the exact symbol names on your account
     python -m tradingbot run                 # trade on the account in .env (demo by default)
+    python -m tradingbot news                # check news feeds, upcoming events and headline reading
     python -m tradingbot backtest --synthetic
     python -m tradingbot backtest --csv EURUSD=data/eurusd_15m.csv
     python -m tradingbot backtest --tradelocker --days 60
@@ -50,6 +51,35 @@ def cmd_symbols(args) -> None:
         print("  all symbols found - ready to run")
 
 
+def cmd_news(args) -> None:
+    import pandas as pd
+
+    from .journal import Journal
+    from .news import NewsMonitor
+
+    s = Settings()
+    j = Journal(s.db_path, mode=s.mode)
+    mon = NewsMonitor(s, j)
+    now = pd.Timestamp.now(tz="UTC")
+    print(f"Reading headlines with: {mon.reader}" + ("" if mon.reader == "claude" else
+          "  (add ANTHROPIC_API_KEY to .env to let Claude read the news)"))
+    mon.refresh(now)
+    print("\nUpcoming high-impact events (UTC):")
+    for e in mon.upcoming(now, hours=24 * 7)[:25]:
+        print(f"  {e.time:%a %d %b %H:%M}  {e.title:<40} -> {', '.join(e.symbols)}")
+    rows = [r for r in j.news(200, kind="headline") if (r["impact"] or 0) >= s.news.min_impact]
+    print(f"\nMarket-moving headlines in the last {s.news.max_headline_age_minutes} min:")
+    for r in rows[:20]:
+        eff = ", ".join(f"{k} {'up' if v > 0 else 'down'}" for k, v in r["effects"].items()) or "no clear direction"
+        print(f"  [{r['impact']}] {r['ts'][11:16]} {r['title'][:90]}\n        -> {eff}")
+    if not rows:
+        print("  none right now")
+    print("\nNews state per symbol:")
+    for sym in s.symbols:
+        st = mon.state(sym, now)
+        print(f"  {sym:<8} {st['news_state']:<15} {st['news_kind']:<14} {st['news_title'][:60]}")
+
+
 def cmd_run(args) -> None:
     from .agent import Agent
     from .broker.tradelocker_broker import TradeLockerBroker
@@ -62,7 +92,13 @@ def cmd_run(args) -> None:
     broker = TradeLockerBroker(s)
     _require_symbols(broker, s.symbols)
     journal = Journal(s.db_path, mode=s.mode)
-    agent = Agent(s, broker, journal)
+    news = None
+    if s.news.enabled:
+        from .news import NewsMonitor
+
+        news = NewsMonitor(s, journal)
+        logging.info("News monitor on (headlines read by %s)", news.reader)
+    agent = Agent(s, broker, journal, news=news)
     banner = "LIVE ACCOUNT - REAL MONEY" if s.is_live else "demo account"
     logging.info("Agent started on %s | symbols=%s tf=%s risk=%.1f%% target=%.0fR",
                  banner, s.symbols, s.timeframe, s.risk.risk_per_trade * 100, s.risk.reward_multiple)
@@ -158,6 +194,7 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="tradingbot")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("run").set_defaults(fn=cmd_run)
+    sub.add_parser("news", help="check the news feeds, calendar and how headlines are read").set_defaults(fn=cmd_news)
     sy = sub.add_parser("symbols", help="log in and list instrument names")
     sy.add_argument("--search", default="")
     sy.set_defaults(fn=cmd_symbols)
