@@ -187,3 +187,19 @@ def test_keyword_reader_never_puts_symbols_in_breaking_mode(tmp_path):
     assert m.state("XTIUSD", NOW)["news_state"] == "clear" and not m.hot_symbols(NOW)
     assert j.news(10, kind="headline")[0]["impact"] == 2          # still recorded for context
     assert m.reset_headlines() == 1 and not j.news(10, kind="headline")
+
+
+def test_calendar_falls_back_to_saved_copy_when_rate_limited(tmp_path):
+    cpi = ScheduledEvent(NOW + pd.Timedelta(hours=2), "CPI m/m", "cpi", 3, ["USTECH"])
+    m, j = make_monitor(tmp_path, [cpi])
+    m.refresh(NOW)                                   # first run saves the calendar
+
+    def limited(symbols):
+        raise RuntimeError("429 Too Many Requests")
+
+    s = m.s
+    m2 = NewsMonitor(s, j, classifier=KeywordClassifier(), fetch_calendar_fn=limited,
+                     fetch_headlines_fn=lambda f, a, n: [], load_earnings_fn=lambda syms, d: [])
+    m2.refresh(NOW)                                  # fresh start while rate-limited
+    assert [e.title for e in m2.events] == ["CPI m/m"]
+    assert m2.blackout("USTECH", NOW + pd.Timedelta(hours=2)) is not None

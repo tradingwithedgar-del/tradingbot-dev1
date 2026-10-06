@@ -88,7 +88,7 @@ class NewsConfig:
     # simple keyword reader is used instead.
     model: str = field(default_factory=lambda: os.getenv("NEWS_MODEL", "claude-opus-5-5"))
     headline_poll_seconds: int = 90
-    calendar_refresh_minutes: int = 60
+    calendar_refresh_minutes: int = 180   # the free calendar rate-limits; it changes rarely anyway
     max_headline_age_minutes: int = 120
     max_headlines_per_call: int = 25
     min_impact: int = 2                    # 0-3; headlines below this are ignored for trading

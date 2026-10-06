@@ -76,10 +76,16 @@ class NewsMonitor:
             self._last_calendar = now
             events: list[ScheduledEvent] = []
             try:
-                events += self._fetch_calendar(self.s.symbols)
+                fetched = self._fetch_calendar(self.s.symbols)
+                events += fetched
+                self.j.set("calendar_cache", [{"time": e.time.isoformat(), "title": e.title, "kind": e.kind,
+                                               "impact": e.impact, "symbols": e.symbols} for e in fetched])
             except Exception as e:
-                log.warning("economic calendar unavailable: %s", e)
-                events = [e for e in self.events if e.source == "calendar"]
+                # The free calendar rate-limits; fall back to the last copy and try again in 10 minutes.
+                events = [ev for ev in self.events if ev.source == "calendar"] or self._cached_calendar()
+                log.warning("economic calendar unavailable (%s) - using saved copy with %d events, retrying in 10 min",
+                            e, len(events))
+                self._last_calendar = now - pd.Timedelta(minutes=self.cfg.calendar_refresh_minutes - 10)
             try:
                 events += self._load_earnings(self.s.symbols, self.s.db_path.parent)
             except Exception as e:
@@ -99,6 +105,14 @@ class NewsMonitor:
                 self._classify(new[i:i + self.cfg.max_headlines_per_call])
         cutoff = now - pd.Timedelta(minutes=self.cfg.post_event_window_minutes)
         self.breaking = [b for b in self.breaking if b.time >= cutoff]
+
+    def _cached_calendar(self) -> list[ScheduledEvent]:
+        out = []
+        for d in self.j.get("calendar_cache", []) or []:
+            syms = [x for x in d["symbols"] if x in self.s.symbols]
+            if syms:
+                out.append(ScheduledEvent(pd.Timestamp(d["time"]), d["title"], d["kind"], d["impact"], syms))
+        return out
 
     def _classify(self, batch: list[Headline]) -> None:
         try:
