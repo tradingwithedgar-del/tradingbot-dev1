@@ -146,6 +146,7 @@ SCHEMA = {
 
 class ClaudeClassifier:
     name = "claude"
+    background = True   # runs off the trading loop
 
     def __init__(self, model: str) -> None:
         import anthropic
@@ -238,6 +239,7 @@ class ClaudeCodeClassifier:
 
     name = "claude"
     source = "claude-subscription"
+    background = True   # runs off the trading loop
 
     def __init__(self, binary: str, model: str = "", min_interval_seconds: int = 300, timeout: int = 180) -> None:
         self.binary = binary
@@ -266,7 +268,8 @@ class ClaudeCodeClassifier:
             cmd += ["--model", self.model]
         try:
             with tempfile.TemporaryDirectory() as empty:   # no project files for Claude Code to pick up
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout, cwd=empty)
+                env = dict(os.environ, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", DISABLE_AUTOUPDATER="1")
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout, cwd=empty, env=env)
             envelope = json.loads(proc.stdout or "{}")
             if proc.returncode != 0 or envelope.get("is_error"):
                 raise RuntimeError((envelope.get("result") or proc.stderr or "unknown error")[:200])

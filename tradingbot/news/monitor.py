@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import pandas as pd
@@ -51,6 +53,9 @@ class NewsMonitor:
         self._last_calendar: pd.Timestamp | None = None
         self._last_headlines: pd.Timestamp | None = None
         self._last_classify: pd.Timestamp | None = None
+        self._lock = threading.Lock()
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="news-reader")
+        self._pending: Future | None = None
 
     @property
     def reader(self) -> str:
@@ -101,16 +106,47 @@ class NewsMonitor:
             except Exception as e:
                 log.warning("headline feeds unavailable: %s", e)
                 heads = []
-            new = [h for h in heads if h.key not in self._seen]
-            # Readers on a usage allowance (Claude subscription) are called at most every N seconds;
-            # unread headlines simply wait for the next batch.
-            gap = getattr(self.classifier, "min_interval_seconds", 0)
-            if new and (self._last_classify is None or (now - self._last_classify).total_seconds() >= gap):
-                self._last_classify = now
-                for i in range(0, len(new), self.cfg.max_headlines_per_call):
-                    self._classify(new[i:i + self.cfg.max_headlines_per_call])
+            self._dispatch([h for h in heads if h.key not in self._seen], now)
         cutoff = now - pd.Timedelta(minutes=self.cfg.post_event_window_minutes)
-        self.breaking = [b for b in self.breaking if b.time >= cutoff]
+        with self._lock:
+            self.breaking = [b for b in self.breaking if b.time >= cutoff]
+
+    def _dispatch(self, new: list[Headline], now: pd.Timestamp) -> None:
+        """Send new headlines to the reader without ever holding up trading.
+
+        Claude reads only the freshest batch (one call at a time, at most every N seconds, in the
+        background). Anything older or beyond that batch is skimmed by the keyword reader, which
+        is instant. This keeps memory/CPU low on small servers and protects plan usage."""
+        if not new:
+            return
+        slow = getattr(self.classifier, "background", False)
+        if not slow:
+            for i in range(0, len(new), self.cfg.max_headlines_per_call):
+                self._classify(new[i:i + self.cfg.max_headlines_per_call])
+            return
+        busy = self._pending is not None and not self._pending.done()
+        gap = getattr(self.classifier, "min_interval_seconds", 0)
+        due = self._last_classify is None or (now - self._last_classify).total_seconds() >= gap
+        fresh_cut = now - pd.Timedelta(minutes=self.cfg.post_event_window_minutes)
+        fresh = sorted((h for h in new if h.time >= fresh_cut), key=lambda h: h.time, reverse=True)
+        batch = fresh[: self.cfg.max_headlines_per_call] if (due and not busy) else []
+        rest = [h for h in new if h not in batch]
+        stale = [h for h in rest if h.time < fresh_cut]
+        if stale:   # too old to trade on - skim them so they aren't queued forever
+            self._classify(stale, KeywordClassifier())
+        if batch:
+            self._last_classify = now
+            for h in batch:
+                self._seen.add(h.key)
+            self._pending = self._executor.submit(self._classify, batch)
+
+    def wait(self, timeout: float = 300) -> None:
+        """Block until a background read finishes (used by the `news` command)."""
+        if self._pending is not None:
+            try:
+                self._pending.result(timeout=timeout)
+            except Exception:
+                log.exception("background news reading failed")
 
     def _cached_calendar(self) -> list[ScheduledEvent]:
         out = []
@@ -120,9 +156,10 @@ class NewsMonitor:
                 out.append(ScheduledEvent(pd.Timestamp(d["time"]), d["title"], d["kind"], d["impact"], syms))
         return out
 
-    def _classify(self, batch: list[Headline]) -> None:
+    def _classify(self, batch: list[Headline], reader=None) -> None:
+        reader = reader or self.classifier
         try:
-            results = self.classifier.classify(batch, self.s.symbols)
+            results = reader.classify(batch, self.s.symbols)
         except Exception as e:
             log.warning("news classifier failed (%s) - keyword fallback", e)
             results = KeywordClassifier().classify(batch, self.s.symbols)
@@ -130,8 +167,9 @@ class NewsMonitor:
             self._seen.add(h.key)
             self._record(h.key, "headline", h.time, h.title, a.category, a.impact, a.effects, a.summary, h.source,
                          link=h.link, reader=a.source)
-            if a.impact >= self.breaking_threshold and a.effects:
-                self.breaking.append(BreakingItem(h.time, h.title, a.category, a.impact, a.effects, a.summary))
+            if a.impact >= self.breaking_threshold and a.effects and a.source != "keywords":
+                with self._lock:
+                    self.breaking.append(BreakingItem(h.time, h.title, a.category, a.impact, a.effects, a.summary))
                 self.j.event("news", f"[impact {a.impact}] {h.title} -> "
                              + ", ".join(f"{s} {'up' if d > 0 else 'down'}" for s, d in a.effects.items()),
                              {"category": a.category, "effects": a.effects, "source": h.source})

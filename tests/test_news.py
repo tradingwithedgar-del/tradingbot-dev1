@@ -81,13 +81,24 @@ def test_claude_classifier_parses_structured_output():
     assert a.impact == 3 and a.effects == {"USTECH": 1} and a.source == "claude"
 
 
+class FakeClaude(KeywordClassifier):
+    name = "claude"
+
+    def classify(self, headlines, symbols):
+        out = super().classify(headlines, symbols)
+        for a in out:
+            a.source = "claude"
+            if a.impact == 2:
+                a.impact = 3      # Claude may rate genuine escalations as major
+        return out
+
+
 def make_monitor(tmp_path, events=(), headlines=()):
     s = Settings()
     s.symbols = SYMS
     s.db_path = tmp_path / "n.db"
     j = Journal(s.db_path, mode="demo")
-    reader = KeywordClassifier()
-    reader.name = "claude"   # behave like the Claude reader so headlines can drive decisions
+    reader = FakeClaude()   # behaves like the Claude reader so headlines can drive decisions
     m = NewsMonitor(s, j, classifier=reader, fetch_calendar_fn=lambda syms: list(events),
                     fetch_headlines_fn=lambda feeds, age, now: list(headlines), load_earnings_fn=lambda syms, d: [])
     return m, j
@@ -108,7 +119,7 @@ def test_monitor_states_blackout_and_flatten(tmp_path):
     later = NOW + pd.Timedelta(minutes=20)
     assert m.state("US500", later)["news_state"] in ("post_event", "breaking")
     assert "USTECH" in m.hot_symbols(NOW)
-    assert j.news(10, kind="headline")[0]["impact"] == 2
+    assert j.news(10, kind="headline")[0]["impact"] == 3
     assert any(e["kind"] == "news" for e in j.events())
 
 
@@ -237,3 +248,36 @@ def test_dashboard_password(tmp_path, monkeypatch):
     assert c.get("/api/modes").status_code == 401
     assert c.get("/api/modes", auth=("tiim", "wrong")).status_code == 401
     assert c.get("/api/modes", auth=("tiim", "s3cret")).json() == ["demo"]
+
+
+def test_slow_reader_runs_in_background_and_only_reads_fresh_batch(tmp_path):
+    import threading
+
+    gate = threading.Event()
+    calls = []
+
+    class SlowClaude(FakeClaude):
+        background = True
+        min_interval_seconds = 300
+
+        def classify(self, headlines, symbols):
+            calls.append(len(headlines))
+            gate.wait(5)
+            return super().classify(headlines, symbols)
+
+    s = Settings()
+    s.symbols = SYMS
+    s.db_path = tmp_path / "bg.db"
+    j = Journal(s.db_path, mode="demo")
+    old = [Headline(NOW - pd.Timedelta(minutes=100 - i), f"Old Saudi missile item {i}", "x", "") for i in range(40)]
+    fresh = [Headline(NOW - pd.Timedelta(minutes=i), f"Iran missile strike on tanker {i}", "x", "") for i in range(30)]
+    m = NewsMonitor(s, j, classifier=SlowClaude(), fetch_calendar_fn=lambda syms: [],
+                    fetch_headlines_fn=lambda f, a, n: old + fresh, load_earnings_fn=lambda syms, d: [])
+    m.refresh(NOW)                                    # returns immediately: trading is never held up
+    assert m._pending is not None and not m._pending.done()
+    m.refresh(NOW + pd.Timedelta(minutes=2))          # still busy / not due -> no second call
+    gate.set()
+    m.wait()
+    assert calls == [s.news.max_headlines_per_call]   # one call, freshest batch only
+    assert m.state("XTIUSD", NOW)["news_state"] == "breaking"
+    assert len(j.news(200, kind="headline")) == 40 + s.news.max_headlines_per_call

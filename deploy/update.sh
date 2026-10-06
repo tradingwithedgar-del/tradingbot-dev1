@@ -5,6 +5,21 @@ set -uo pipefail
 APP=/opt/tiim
 cd "$APP"
 as_tiim() { sudo -u tiim "$@"; }
+ensure_swap() {
+  # A 2 GB swap file keeps small (1 GB) servers from running out of memory.
+  if ! swapon --show 2>/dev/null | grep -q '/swapfile'; then
+    if [ ! -f /swapfile ]; then
+      fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+      chmod 600 /swapfile
+      mkswap /swapfile >/dev/null
+    fi
+    swapon /swapfile && echo "swap enabled (2 GB)"
+    grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    sysctl -q vm.swappiness=10
+    grep -q '^vm.swappiness' /etc/sysctl.conf || echo 'vm.swappiness=10' >> /etc/sysctl.conf
+  fi
+}
+ensure_swap
 
 as_tiim git fetch --quiet origin || exit 0
 BRANCH=$(as_tiim git rev-parse --abbrev-ref HEAD)

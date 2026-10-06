@@ -67,6 +67,7 @@ def cmd_news(args) -> None:
           "\n  Keyword reader: headlines are shown for context only and don't drive trades."
           "\n  Scheduled events still do. Add ANTHROPIC_API_KEY to .env to let Claude judge headlines."))
     mon.refresh(now)
+    mon.wait()
     print("\nUpcoming high-impact events (UTC):")
     for e in mon.upcoming(now, hours=24 * 7)[:25]:
         print(f"  {e.time:%a %d %b %H:%M}  {e.title:<40} -> {', '.join(e.symbols)}")

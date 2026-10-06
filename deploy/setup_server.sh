@@ -13,6 +13,23 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq python3 python3-venv python3-pip git curl ufw >/dev/null
 
+ensure_swap() {
+  # A 2 GB swap file keeps small (1 GB) servers from running out of memory.
+  if ! swapon --show 2>/dev/null | grep -q '/swapfile'; then
+    if [ ! -f /swapfile ]; then
+      fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+      chmod 600 /swapfile
+      mkswap /swapfile >/dev/null
+    fi
+    swapon /swapfile && echo "swap enabled (2 GB)"
+    grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    sysctl -q vm.swappiness=10
+    grep -q '^vm.swappiness' /etc/sysctl.conf || echo 'vm.swappiness=10' >> /etc/sysctl.conf
+  fi
+}
+echo "==> Adding a 2 GB swap file (memory safety buffer)"
+ensure_swap
+
 echo "==> Creating the 'tiim' user"
 id tiim >/dev/null 2>&1 || useradd --create-home --home-dir /home/tiim --shell /bin/bash tiim
 
