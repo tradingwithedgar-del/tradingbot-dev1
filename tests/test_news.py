@@ -53,7 +53,19 @@ def test_parse_rss_google_style():
 
 def test_keyword_classifier_risk_off():
     a = KeywordClassifier().classify([Headline(NOW, "Russia launches missile strike on Kyiv", "x", "")], SYMS)[0]
-    assert a.impact == 3 and a.effects["USTECH"] == -1 and a.effects["XAUUSD"] == 1 and a.effects["XTIUSD"] == 1
+    assert a.impact == 2 and a.effects["USTECH"] == -1 and a.effects["XAUUSD"] == 1 and a.effects["XTIUSD"] == 1
+
+
+def test_keyword_classifier_ignores_non_market_headlines():
+    noise = ["Gears of War: E-Day Launches October 6, 2026 on Xbox, Steam, and Game Pass",
+             "Ohio man accused of stealing gun, shooting two people during home invasion",
+             "Cold War memories stir Rubio in Iceland as he champions diplomacy",
+             "Why has war returned to Ethiopia?",
+             "Homeowner shoots intruder during Upstate NY home invasion"]
+    res = KeywordClassifier().classify([Headline(NOW, t, "x", "") for t in noise], SYMS)
+    assert all(a.impact == 0 and not a.effects for a in res)
+    real = KeywordClassifier().classify([Headline(NOW, "Houthis claim missile attack on Abha airport in Saudi Arabia", "x", "")], SYMS)[0]
+    assert real.impact == 2 and real.effects["XTIUSD"] == 1
 
 
 def test_claude_classifier_parses_structured_output():
@@ -94,7 +106,7 @@ def test_monitor_states_blackout_and_flatten(tmp_path):
     later = NOW + pd.Timedelta(minutes=20)
     assert m.state("US500", later)["news_state"] in ("post_event", "breaking")
     assert "USTECH" in m.hot_symbols(NOW)
-    assert j.news(10, kind="headline")[0]["impact"] == 3
+    assert j.news(10, kind="headline")[0]["impact"] == 2
     assert any(e["kind"] == "news" for e in j.events())
 
 

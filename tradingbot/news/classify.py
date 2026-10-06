@@ -57,15 +57,39 @@ RULES = [
 ]
 
 
+# Headlines that use market words in a non-market sense (games, crime, history, opinion...).
+NOT_MARKET = re.compile(
+    r"\b(game|gaming|gears of war|xbox|playstation|nintendo|steam|walkthrough|trailer|movie|film|tv series|episode|"
+    r"season \d|review|home invasion|intruder|homeowner|burglar|police|sheriff|suspect|murder|stabbing|shooting|"
+    r"shots fired|cold war|memories|remember|recalls|anniversary|history of|why has|explainer|opinion|podcast|"
+    r"quiz|recipe|celebrity|nfl|nba|mlb|soccer|football)\b", re.I)
+# Geopolitical headlines only count when they involve a market-relevant actor or place.
+MARKET_ACTORS = re.compile(
+    r"\b(iran|israel|gaza|hamas|hezbollah|houthi|saudi|opec|hormuz|red sea|russia|ukraine|moscow|kyiv|china|beijing|"
+    r"taiwan|north korea|nato|pentagon|white house|trump|biden|u\.?s\.? (strikes?|troops|military)|federal reserve|fed)\b",
+    re.I)
+KEYWORD_MAX_IMPACT = 2   # keyword reading can't judge context, so it never triggers the impact-3 protections
+
+
 class KeywordClassifier:
+    """Free fallback. Crude: it only gives the learner context; it never rates a headline as a
+    major (impact 3) market mover, so it can't trigger trade protection or block trades on its own.
+    Set ANTHROPIC_API_KEY to let Claude judge headlines properly."""
+
     name = "keywords"
 
     def classify(self, headlines: list[Headline], symbols: list[str]) -> list[Assessment]:
         out = []
         for h in headlines:
             a = Assessment(summary=h.title)
+            if NOT_MARKET.search(h.title):
+                out.append(a)
+                continue
             for pattern, impact, cat, dirs in RULES:
+                if cat == "geopolitics" and not MARKET_ACTORS.search(h.title):
+                    continue
                 if re.search(pattern, h.title, re.I):
+                    impact = min(impact, KEYWORD_MAX_IMPACT)
                     if impact > a.impact:
                         a.impact, a.category = impact, cat
                     for s in symbols:
