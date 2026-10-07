@@ -281,3 +281,19 @@ def test_slow_reader_runs_in_background_and_only_reads_fresh_batch(tmp_path):
     assert calls == [s.news.max_headlines_per_call]   # one call, freshest batch only
     assert m.state("XTIUSD", NOW)["news_state"] == "breaking"
     assert len(j.news(200, kind="headline")) == 40 + s.news.max_headlines_per_call
+
+
+def test_tradingview_symbol_mapping(tmp_path, monkeypatch):
+    import json as _json
+
+    from fastapi.testclient import TestClient
+
+    from tradingbot.dashboard import app as dash
+
+    monkeypatch.delenv("DASHBOARD_PASSWORD", raising=False)
+    db = tmp_path / "tv.db"
+    Journal(db, mode="demo").record_equity(100, 100, 100)
+    monkeypatch.setattr("tradingbot.config.DATA_DIR", tmp_path)
+    (tmp_path / "tradingview.json").write_text(_json.dumps({"USTECH": "CAPITALCOM:US100"}))
+    m = TestClient(dash.create_app(db)).get("/api/tv-symbols").json()
+    assert m["USTECH"] == "CAPITALCOM:US100" and m["XAUUSD"] == "OANDA:XAUUSD" and m["NVDA"] == "NASDAQ:NVDA"

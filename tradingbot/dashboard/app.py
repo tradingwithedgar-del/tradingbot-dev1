@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import base64
+import json
 import hmac
 import os
 
@@ -18,6 +19,18 @@ from ..learning import CANDIDATE, EdgeStat
 from ..strategies.registry import disabled, discover
 
 STATIC = Path(__file__).parent / "static"
+# TradingView's names for TIIM's (PlexyTrade) symbols. Prices come from TradingView's own feed, so
+# they can differ slightly from PlexyTrade's.
+TV_SYMBOLS = {
+    "US30": "OANDA:US30USD", "US500": "OANDA:SPX500USD", "USTECH": "OANDA:NAS100USD",
+    "RUSS2000": "OANDA:US2000USD", "XAUUSD": "OANDA:XAUUSD", "XAGUSD": "OANDA:XAGUSD",
+    "XTIUSD": "OANDA:WTICOUSD", "XBRUSD": "OANDA:BCOUSD", "XNGUSD": "OANDA:NATGASUSD",
+    "BTCUSD": "COINBASE:BTCUSD", "ETHUSD": "COINBASE:ETHUSD", "SOLUSD": "COINBASE:SOLUSD",
+    "LTCUSD": "COINBASE:LTCUSD", "XRPUSD": "BITSTAMP:XRPUSD",
+    "NVDA": "NASDAQ:NVDA", "AAPL": "NASDAQ:AAPL", "TSLA": "NASDAQ:TSLA", "MSFT": "NASDAQ:MSFT",
+    "AMZN": "NASDAQ:AMZN", "META": "NASDAQ:META", "AMD": "NASDAQ:AMD", "NFLX": "NASDAQ:NFLX",
+    "EURUSD": "OANDA:EURUSD", "GBPUSD": "OANDA:GBPUSD", "USDJPY": "OANDA:USDJPY",
+}
 DIMENSIONS = ["regime", "session", "structure", "bias", "volatility", "symbol", "rsi_zone", "confluence",
               "news_state", "news_kind", "news_agree"]
 
@@ -227,6 +240,19 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             tags = (t.get("postmortem") or {}).get("tags", [])
             (loss_tags if (t["r_multiple"] or 0) < 0 else win_tags).update(tags)
         return {"losses": loss_tags.most_common(), "wins": win_tags.most_common()}
+
+    @app.get("/api/tv-symbols")
+    def tv_symbols():
+        """TIIM symbol -> TradingView symbol. Override or add in data/tradingview.json, e.g.
+        {"USTECH": "CAPITALCOM:US100"}."""
+        mapping = dict(TV_SYMBOLS)
+        extra = settings.db_path.parent / "tradingview.json"
+        if extra.exists():
+            try:
+                mapping.update(json.loads(extra.read_text()))
+            except ValueError:
+                pass
+        return {sym: mapping.get(sym, sym) for sym in settings.symbols} | mapping
 
     @app.get("/api/symbols")
     def symbols(mode: str):

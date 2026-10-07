@@ -71,6 +71,12 @@ tr.click:hover { background: var(--grid); }
 .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 4px 16px; font-size: 13px; }
 .kv div span { color: var(--ink-2); }
 .empty { color: var(--muted); padding: 24px; text-align: center; }
+.tabs { display: inline-flex; border: 1px solid var(--axis); border-radius: 8px; overflow: hidden; }
+.tab { border: 0; border-radius: 0; background: transparent; color: var(--ink-2); padding: 6px 12px; }
+.tab.on { background: var(--grid); color: var(--ink); font-weight: 600; }
+.tv-wrap { height: 640px; width: 100%; }
+.tv-wrap > div, .tv-wrap iframe { height: 100% !important; width: 100% !important; }
+@media (max-width: 900px) { .tv-wrap, #viewChart { height: 520px !important; } }
 </style>
 </head>
 <body>
@@ -91,16 +97,28 @@ tr.click:hover { background: var(--grid); }
 
   <section class="card" id="viewCard">
     <div class="controls" style="justify-content:space-between">
-      <div><h2>What TIIM sees</h2><p class="sub">Its zones, swing structure, indicators and open trades on the latest closed bars. Updates every bar close. To close a trade, close it in TradeLocker. TIIM notices and records it as closed by you.</p></div>
+      <div><h2>Charts</h2><p class="sub" id="chartSub">TIIM's zones, swing structure, indicators and open trades on the latest closed bars. To close a trade, close it in TradeLocker. TIIM notices and records it as closed by you.</p></div>
       <div class="controls">
+        <div class="tabs" role="tablist">
+          <button class="tab on" id="tabTiim" role="tab" aria-selected="true">What TIIM sees</button>
+          <button class="tab" id="tabTv" role="tab" aria-selected="false">TradingView</button>
+        </div>
         <label>Symbol <select id="viewSym"></select></label>
-        <label><input type="checkbox" id="showSwings" checked> swings</label>
-        <label><input type="checkbox" id="showZones" checked> zones</label>
-        <label><input type="checkbox" id="showVirtual"> virtual trades</label>
+        <span id="tiimToggles" class="controls">
+          <label><input type="checkbox" id="showSwings" checked> swings</label>
+          <label><input type="checkbox" id="showZones" checked> zones</label>
+          <label><input type="checkbox" id="showVirtual"> virtual trades</label>
+        </span>
       </div>
     </div>
-    <div class="kv" id="viewRead" style="margin-bottom:8px"></div>
-    <div class="chart" id="viewChart" style="height:640px"></div>
+    <div id="tiimPane">
+      <div class="kv" id="viewRead" style="margin-bottom:8px"></div>
+      <div class="chart" id="viewChart" style="height:640px"></div>
+    </div>
+    <div id="tvPane" style="display:none">
+      <div class="tv-wrap" id="tvChart"></div>
+      <p class="sub" style="margin-top:8px" id="tvNote"></p>
+    </div>
   </section>
 
   <section class="card half"><h2>Upcoming news events</h2><p class="sub">High-impact releases and earnings the agent is watching. No new trades from 15 min before to 5 min after</p><div class="table-wrap" style="max-height:340px"><table id="eventsTable"></table></div></section>
@@ -183,7 +201,11 @@ async function init() {
   const modes = await get('/api/modes');
   $('mode').innerHTML = modes.map(m => `<option>${m}</option>`).join('') || '<option>demo</option>';
   MODE = $('mode').value;
-  ['viewSym','showSwings','showZones','showVirtual'].forEach(id => $(id).addEventListener('change', () => refreshView()));
+  ['showSwings','showZones','showVirtual'].forEach(id => $(id).addEventListener('change', () => refreshView()));
+  $('viewSym').addEventListener('change', () => { refreshView(); if (CHART_TAB === 'tv') loadTradingView(true); });
+  $('tabTiim').onclick = () => setChartTab('tiim');
+  $('tabTv').onclick = () => setChartTab('tv');
+  try { if (localStorage.getItem('tiim.chartTab') === 'tv') setChartTab('tv'); } catch (e) {}
   ['mode','kind','dim','dimKind'].forEach(id => $(id).addEventListener('change', () => { MODE = $('mode').value; refresh(); }));
   $('dClose').onclick = () => { $('detail').style.display = 'none'; };
   $('theme').onclick = () => {
@@ -208,8 +230,62 @@ async function refresh() {
   renderSummary(sum); renderEquity(eq); renderStrategies(strats, trades); renderHeat(heat);
   renderTags(pmort); renderEvents(evs); renderTrades(trades);
   await refreshSymbols();
-  refreshView();
+  if (CHART_TAB === 'tiim') refreshView(); else loadTradingView(false);
   get('/api/news').then(renderNews).catch(() => {});
+}
+
+let CHART_TAB = 'tiim', TV_MAP = null, TV_LOADED = '';
+
+function setChartTab(tab) {
+  CHART_TAB = tab;
+  const tv = tab === 'tv';
+  $('tabTiim').classList.toggle('on', !tv); $('tabTiim').setAttribute('aria-selected', String(!tv));
+  $('tabTv').classList.toggle('on', tv); $('tabTv').setAttribute('aria-selected', String(tv));
+  $('tiimPane').style.display = tv ? 'none' : 'block';
+  $('tvPane').style.display = tv ? 'block' : 'none';
+  $('tiimToggles').style.display = tv ? 'none' : '';
+  $('chartSub').textContent = tv
+    ? "TradingView's live chart for the same symbol: draw, add indicators, change timeframe. Prices come from TradingView's feed and can differ slightly from PlexyTrade's."
+    : "TIIM's zones, swing structure, indicators and open trades on the latest closed bars. To close a trade, close it in TradeLocker. TIIM notices and records it as closed by you.";
+  try { localStorage.setItem('tiim.chartTab', tab); } catch (e) {}
+  if (tv) loadTradingView(false); else refreshView();
+}
+
+function isDark() {
+  const t = document.documentElement.dataset.theme;
+  return t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+async function loadTradingView(force) {
+  const sym = $('viewSym').value;
+  if (!sym) { $('tvChart').innerHTML = '<div class="empty">No symbols yet</div>'; return; }
+  if (!TV_MAP) { try { TV_MAP = await get('/api/tv-symbols'); } catch (e) { TV_MAP = {}; } }
+  const tvSym = TV_MAP[sym] || sym;
+  const key = tvSym + (isDark() ? ':d' : ':l');
+  if (!force && TV_LOADED === key) return;
+  TV_LOADED = key;
+  $('tvNote').textContent = `${sym} shown as TradingView symbol ${tvSym}. Change it in data/tradingview.json on the server if you prefer another feed.`;
+  const box = $('tvChart');
+  box.innerHTML = '';
+  const holder = document.createElement('div');
+  holder.className = 'tradingview-widget-container';
+  holder.style.height = '100%';
+  const inner = document.createElement('div');
+  inner.className = 'tradingview-widget-container__widget';
+  inner.style.height = '100%';
+  holder.appendChild(inner);
+  const script = document.createElement('script');
+  script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+  script.async = true;
+  script.text = JSON.stringify({
+    symbol: tvSym, interval: '15', timezone: 'Etc/UTC', theme: isDark() ? 'dark' : 'light', style: '1',
+    locale: 'en', autosize: true, allow_symbol_change: true, withdateranges: true, hide_side_toolbar: false,
+    details: true, calendar: false, support_host: 'https://www.tradingview.com',
+    studies: ['RSI@tv-basicstudies', 'MACD@tv-basicstudies', 'MAExp@tv-basicstudies'],
+  });
+  script.onerror = () => { box.innerHTML = '<div class="empty">Couldn\'t reach TradingView from this browser.</div>'; };
+  holder.appendChild(script);
+  box.appendChild(holder);
 }
 
 async function refreshSymbols() {
