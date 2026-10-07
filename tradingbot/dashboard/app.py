@@ -108,6 +108,15 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
         return FileResponse(Path(plotly.__file__).parent / "package_data" / "plotly.min.js", media_type="text/javascript")
 
+    @app.get("/vendor/lightweight-charts.js")
+    def lwc_js():
+        # TradingView Lightweight Charts (Apache-2.0), bundled so the dashboard needs no CDN.
+        return FileResponse(STATIC / "vendor" / "lightweight-charts.js", media_type="text/javascript")
+
+    @app.get("/tiimchart.js")
+    def tiimchart_js():
+        return FileResponse(STATIC / "tiimchart.js", media_type="text/javascript")
+
     @app.get("/api/modes")
     def modes():
         rows = j.conn.execute("SELECT DISTINCT mode FROM trades UNION SELECT DISTINCT mode FROM equity").fetchall()

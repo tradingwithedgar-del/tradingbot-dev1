@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TIIM Dashboard</title>
 <script src="/plotly.min.js"></script>
+<script src="/vendor/lightweight-charts.js"></script>
+<script src="/tiimchart.js"></script>
 <style>
 :root {
   color-scheme: light;
@@ -75,8 +77,14 @@ tr.click:hover { background: var(--grid); }
 .tab { border: 0; border-radius: 0; background: transparent; color: var(--ink-2); padding: 6px 12px; }
 .tab.on { background: var(--grid); color: var(--ink); font-weight: 600; }
 .tv-wrap { height: 640px; width: 100%; }
+.lw { height: 640px; width: 100%; position: relative; }
+.why { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
+.why .box { border: 1px solid var(--ring); border-radius: 8px; padding: 10px 12px; }
+.why h3 { font-size: 13px; margin: 0 0 6px; color: var(--ink-2); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+.why p { margin: 4px 0; }
+.why .big { font-size: 15px; }
 .tv-wrap > div, .tv-wrap iframe { height: 100% !important; width: 100% !important; }
-@media (max-width: 900px) { .tv-wrap, #viewChart { height: 520px !important; } }
+@media (max-width: 900px) { .tv-wrap, .lw { height: 520px !important; } }
 </style>
 </head>
 <body>
@@ -113,7 +121,8 @@ tr.click:hover { background: var(--grid); }
     </div>
     <div id="tiimPane">
       <div class="kv" id="viewRead" style="margin-bottom:8px"></div>
-      <div class="chart" id="viewChart" style="height:640px"></div>
+      <div class="lw" id="viewChart"></div>
+      <p class="sub" style="margin-top:6px">Tap a trade arrow to see why TIIM took it.</p>
     </div>
     <div id="tvPane" style="display:none">
       <div class="tv-wrap" id="tvChart"></div>
@@ -153,10 +162,9 @@ tr.click:hover { background: var(--grid); }
   <section class="card half"><h2>Agent journal</h2><p class="sub">What TIIM learned, how it tuned its strategies, news it acted on, and approvals it needs</p><ul class="events" id="events"></ul></section>
 
   <section class="card" id="detail">
-    <div class="controls" style="justify-content:space-between"><h2 id="dTitle"></h2><button id="dClose">Close</button></div>
-    <div class="chart tall" id="dChart"></div>
-    <div class="kv" id="dKv"></div>
-    <div id="dNotes" style="margin-top:10px"></div>
+    <div class="controls" style="justify-content:space-between"><div><h2 id="dTitle"></h2><p class="sub" id="dSub"></p></div><button id="dClose">Close</button></div>
+    <div class="lw" id="dChart"></div>
+    <div class="why" id="dWhy"></div>
   </section>
 
   <section class="card">
@@ -212,6 +220,7 @@ async function init() {
     const root = document.documentElement;
     const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
     root.dataset.theme = dark ? 'light' : 'dark';
+    LAST_VIEW_KEY = '';
     refresh();
   };
   refresh();
@@ -226,7 +235,7 @@ async function refresh() {
     get(`/api/breakdown?mode=${m}&by=${$('dim').value}&kind=${$('dimKind').value}`),
     get(`/api/postmortems?mode=${m}`), get(`/api/events?mode=${m}`),
   ]);
-  strats.forEach(s => seriesColor(s.name));
+  strats.forEach(s => { seriesColor(s.name); STRATS[s.name] = s; });
   renderSummary(sum); renderEquity(eq); renderStrategies(strats, trades); renderHeat(heat);
   renderTags(pmort); renderEvents(evs); renderTrades(trades);
   await refreshSymbols();
@@ -296,6 +305,14 @@ async function refreshSymbols() {
   $('viewCard').style.display = syms.length ? 'block' : 'none';
 }
 
+function chartColors() {
+  return {surface: css('--surface'), ink: css('--ink'), ink2: css('--ink-2'), grid: css('--grid'), axis: css('--axis'),
+    up: css('--s3'), down: css('--s8'), ema50: css('--s1'), ema200: css('--s7'), rsi: css('--s4'),
+    demand: css('--s1'), supply: css('--s2'), entry: css('--s1'), good: css('--good'), bad: css('--critical')};
+}
+
+let LIVE_CHART = null, DETAIL_CHART = null, LAST_VIEW_KEY = '';
+
 async function refreshView() {
   const sym = $('viewSym').value;
   if (!sym) return;
@@ -303,65 +320,18 @@ async function refreshView() {
   try { v = await get(`/api/view?mode=${encodeURIComponent(MODE)}&symbol=${encodeURIComponent(sym)}`); } catch { return; }
   const r = v.read || {}, n = r.news || {};
   const newsTxt = n.news_state && n.news_state !== 'clear'
-    ? `${n.news_state.replace('_', ' ')} · ${n.news_kind}${n.news_dir ? (n.news_dir > 0 ? ' (bullish)' : ' (bearish)') : ''} · ${esc(n.news_title || '')}` : 'clear';
-  $('viewRead').innerHTML = [['Updated', v.updated.slice(0, 16).replace('T', ' ') + ' UTC'], ['Structure', r.trend], ['HTF bias', r.bias],
-    ['Regime', r.regime], ['RSI', r.rsi == null ? '—' : r.rsi.toFixed(1)], ['News', newsTxt]]
+    ? `${esc(n.news_state.replace('_', ' '))} · ${esc(n.news_kind)}${n.news_dir ? (n.news_dir > 0 ? ' (bullish)' : ' (bearish)') : ''} · ${esc(n.news_title || '')}` : 'clear';
+  $('viewRead').innerHTML = [['Updated', esc(v.updated.slice(0, 16).replace('T', ' ')) + ' UTC'], ['Structure', esc(r.trend)], ['HTF bias', esc(r.bias)],
+    ['Regime', esc(r.regime)], ['RSI', r.rsi == null ? '—' : r.rsi.toFixed(1)], ['News', newsTxt]]
     .map(([k, x]) => `<div><span>${k}:</span> ${x}</div>`).join('');
-  const x = v.t, last = x[x.length - 1];
-  const traces = [
-    {type: 'candlestick', x, open: v.open, high: v.high, low: v.low, close: v.close, name: 'price', xaxis: 'x', yaxis: 'y',
-     increasing: {line: {color: css('--s3'), width: 1}}, decreasing: {line: {color: css('--s8'), width: 1}}},
-    {type: 'scatter', mode: 'lines', x, y: v.ema50, name: 'EMA 50', line: {color: css('--s1'), width: 1.5}, xaxis: 'x', yaxis: 'y'},
-    {type: 'scatter', mode: 'lines', x, y: v.ema200, name: 'EMA 200', line: {color: css('--s7'), width: 1.5}, xaxis: 'x', yaxis: 'y'},
-    {type: 'scatter', mode: 'lines', x, y: v.rsi, name: 'RSI 14', line: {color: css('--s4'), width: 1.5}, xaxis: 'x', yaxis: 'y2'},
-    {type: 'bar', x, y: v.macd_hist, name: 'MACD hist', xaxis: 'x', yaxis: 'y3',
-     marker: {color: v.macd_hist.map(h => (h || 0) >= 0 ? css('--s3') : css('--s8'))}},
-  ];
-  const shapes = [], ann = [];
-  if ($('showZones').checked) v.zones.forEach(z => {
-    const c = z.kind === 'demand' ? css('--s1') : css('--s2');
-    shapes.push({type: 'rect', xref: 'x', yref: 'y', x0: z.from, x1: last, y0: z.bottom, y1: z.top, line: {width: 1, color: c},
-      fillcolor: c + (z.fresh ? '40' : '1f'), layer: 'below'});
-    ann.push({xref: 'x', yref: 'y', x: last, y: z.kind === 'demand' ? z.bottom : z.top, xanchor: 'left', showarrow: false,
-      text: `${z.kind}${z.fresh ? ' (fresh)' : ` (${z.touches}x)`}`, font: {size: 10, color: css('--ink-2')}});
-  });
-  if ($('showSwings').checked) {
-    const sw = v.swings.filter(s => s.label);
-    traces.push({type: 'scatter', mode: 'text', x: sw.map(s => s.t), y: sw.map(s => s.price), text: sw.map(s => s.label),
-      textposition: sw.map(s => s.kind === 'H' ? 'top center' : 'bottom center'), textfont: {size: 10, color: css('--ink')},
-      name: 'swings', hoverinfo: 'skip', xaxis: 'x', yaxis: 'y'});
-  }
-  v.divergences.forEach(d => shapes.push({type: 'line', xref: 'x', yref: 'y', x0: d.t1, x1: d.t2, y0: d.p1, y1: d.p2,
-    line: {color: d.kind.endsWith('bull') ? css('--s1') : css('--s2'), width: 2, dash: 'dot'}}));
-  const divLabels = {};
-  v.divergences.forEach(d => {
-    const k = d.t2 + d.kind;
-    if (!divLabels[k]) divLabels[k] = {d, osc: []};
-    divLabels[k].osc.push(d.osc.toUpperCase());
-  });
-  Object.values(divLabels).forEach(({d, osc}) => ann.push({xref: 'x', yref: 'y', x: d.t2, y: d.p2,
-    text: `${d.kind.replace('_', ' ')} div (${osc.join('+')})`, showarrow: true, arrowhead: 0,
-    ay: d.kind.endsWith('bull') ? 34 : -34, font: {size: 10, color: css('--ink-2')}}));
-  v.trades.filter(t => !t.shadow || $('showVirtual').checked).forEach(t => {
-    const x0 = t.opened_at < x[0] ? x[0] : t.opened_at, x1 = t.closed_at || last;
-    const tag = t.shadow ? 'virtual ' : '';
-    [['entry', t.entry, css('--s1'), 'solid'], ['stop', t.stop, css('--critical'), 'dot'], ['target', t.take_profit, css('--good'), 'dot']]
-      .forEach(([nm, y, c, dash]) => shapes.push({type: 'line', xref: 'x', yref: 'y', x0, x1, y0: y, y1: y, line: {color: c, width: t.status === 'open' ? 2 : 1, dash}}));
-    ann.push({xref: 'x', yref: 'y', x: x0, y: t.entry, xanchor: 'right', showarrow: false,
-      text: `#${t.id} ${tag}${t.side} ${t.strategy}${t.status === 'open' ? ' (open)' : ` ${fmtR(t.r_multiple)}`}`,
-      font: {size: 10, color: css('--ink')}});
-  });
-  shapes.push({type: 'line', xref: 'paper', yref: 'y2', x0: 0, x1: 1, y0: 70, y1: 70, line: {color: css('--axis'), width: 1, dash: 'dot'}});
-  shapes.push({type: 'line', xref: 'paper', yref: 'y2', x0: 0, x1: 1, y0: 30, y1: 30, line: {color: css('--axis'), width: 1, dash: 'dot'}});
-  const ax = {gridcolor: css('--grid'), linecolor: css('--axis'), zeroline: false};
-  Plotly.react('viewChart', traces, layout({
-    showlegend: true, legend: {orientation: 'h', y: 1.04, x: 0}, hovermode: 'x', margin: {l: 64, r: 110, t: 24, b: 30},
-    xaxis: Object.assign({}, ax, {rangeslider: {visible: false}, anchor: 'y3'}),
-    yaxis: Object.assign({}, ax, {domain: [0.42, 1], title: {text: sym}}),
-    yaxis2: Object.assign({}, ax, {domain: [0.22, 0.38], range: [0, 100], title: {text: 'RSI'}}),
-    yaxis3: Object.assign({}, ax, {domain: [0, 0.18], title: {text: 'MACD'}}),
-    shapes, annotations: ann,
-  }), cfg);
+  const trades = v.trades.filter(t => !t.shadow || $('showVirtual').checked);
+  const key = [sym, v.updated, trades.map(t => t.id + t.status).join(','), $('showSwings').checked, $('showZones').checked,
+    document.documentElement.dataset.theme || ''].join('|');
+  if (key === LAST_VIEW_KEY && LIVE_CHART) return;     // nothing new: keep the user's zoom/scroll
+  LAST_VIEW_KEY = key;
+  if (LIVE_CHART) LIVE_CHART.destroy();
+  LIVE_CHART = TiimChart.render($('viewChart'), v, {trades, colors: chartColors(), swings: $('showSwings').checked,
+    zones: $('showZones').checked, onTradeClick: (id) => showTrade(id)});
 }
 
 function renderNews(nw) {
@@ -482,34 +452,77 @@ function renderTrades(trades) {
   document.querySelectorAll('#tradeTable tr.click').forEach(tr => tr.onclick = () => showTrade(tr.dataset.id));
 }
 
+const STRATS = {};
+const TAG_TEXT = {
+  sd_reversal: 'a retest of a supply/demand zone with a rejection candle',
+  divergence: 'a momentum divergence confirmed by a candle',
+  structure_trend: 'a pullback in an established HH/HL or LH/LL trend',
+};
+
+function barsToView(rows) {
+  return {t: rows.map(b => b[0]), open: rows.map(b => b[1]), high: rows.map(b => b[2]), low: rows.map(b => b[3]),
+    close: rows.map(b => b[4]), zones: [], swings: [], divergences: []};
+}
+
+function mergeAfter(view, rows) {
+  // extend the entry snapshot with the candles that followed, so the outcome is visible too
+  const v = JSON.parse(JSON.stringify(view));
+  const last = v.t[v.t.length - 1];
+  for (const b of rows || []) {
+    if (b[0] <= last) continue;
+    v.t.push(b[0]); v.open.push(b[1]); v.high.push(b[2]); v.low.push(b[3]); v.close.push(b[4]);
+    for (const k of ['ema50', 'ema200', 'rsi', 'macd_hist']) if (v[k]) v[k].push(null);
+  }
+  return v;
+}
+
 async function showTrade(id) {
   const t = await get(`/api/trade/${id}`);
+  const f = t.features || {}, d = t.decision || {}, pm = t.postmortem || {}, s = STRATS[t.strategy] || {};
+  const side = t.side === 'buy' ? 'BUY' : 'SELL';
   $('detail').style.display = 'block';
-  $('dTitle').textContent = `#${t.id} ${t.strategy} · ${t.symbol} ${t.side.toUpperCase()} · ${t.status === 'open' ? 'open' : fmtR(t.r_multiple)}${t.shadow ? ' · shadow' : ''}`;
-  const bars = t.chart || [];
-  const x = bars.map(b => b[0]);
-  const shapes = [], ann = [];
-  const end = t.closed_at || x[x.length - 1];
-  [['entry', t.entry, css('--s1')], ['stop', t.stop, css('--critical')], ['target', t.take_profit, css('--good')]].forEach(([n, y, c]) => {
-    shapes.push({type: 'line', x0: t.opened_at, x1: end, y0: y, y1: y, line: {color: c, width: 2, dash: n === 'entry' ? 'solid' : 'dot'}});
-    ann.push({x: end, y, text: `${n} ${(+y).toPrecision(6)}`, showarrow: false, xanchor: 'left', font: {color: css('--ink-2'), size: 11}});
-  });
-  const traces = [{type: 'candlestick', x, open: bars.map(b => b[1]), high: bars.map(b => b[2]), low: bars.map(b => b[3]), close: bars.map(b => b[4]),
-    increasing: {line: {color: css('--s3'), width: 1}}, decreasing: {line: {color: css('--s8'), width: 1}}, name: 'price'}];
-  if (t.exit_price != null) traces.push({type: 'scatter', mode: 'markers', x: [t.closed_at], y: [t.exit_price], name: 'exit',
-    marker: {size: 12, symbol: 'x', color: css('--ink'), line: {width: 2, color: css('--surface')}}, hovertemplate: 'exit %{y}<extra></extra>'});
-  Plotly.react('dChart', traces, layout({shapes, annotations: ann, xaxis: {rangeslider: {visible: false}, gridcolor: css('--grid')}, margin: {l: 56, r: 110, t: 8, b: 40}}), cfg);
-  const f = t.features || {}, d = t.decision || {}, pm = t.postmortem || {};
-  const kv = {
-    'Reason': t.reason, 'Regime': f.regime, 'Structure': `${f.structure} (${f.structure_seq || ''})`, 'HTF bias': f.bias,
-    'Session': f.session, 'RSI': f.rsi, 'Confluence': f.confluence, 'Risk': t.risk_pct ? fmtPct(t.risk_pct, 2) : 'virtual',
-    'Best excursion': fmtR(t.mfe_r), 'Worst excursion': fmtR(-(t.mae_r || 0)),
-    'Agent decision': `${d.action || ''} · win prob ${d.p != null ? fmtPct(d.p, 0) : '—'} · exp ${fmtR(d.expected_r)}`,
-  };
-  $('dKv').innerHTML = Object.entries(kv).map(([k, v]) => `<div><span>${k}:</span> ${esc(v ?? '—')}</div>`).join('');
-  $('dNotes').innerHTML = `<div><b>Why it took / skipped it:</b> ${(d.why || []).map(esc).join(' · ') || '—'}</div>` +
-    `<div style="margin-top:6px"><b>Post-mortem${pm.final ? '' : ' (still watching price after exit)'}:</b></div>` +
-    ((pm.notes || []).map(n => `<div class="muted">• ${esc(n)}</div>`).join('') || '<div class="muted">—</div>');
+  $('dTitle').textContent = `Why TIIM took #${t.id}: ${side} ${t.symbol}`;
+  $('dSub').textContent = `${t.shadow ? 'Virtual trade · ' : ''}${(t.opened_at || '').slice(0, 16).replace('T', ' ')} UTC · ` +
+    (t.status === 'open' ? 'still open' : `closed ${fmtR(t.r_multiple)}`) +
+    (t.entry_view ? ' · chart shows exactly what TIIM saw at entry, plus what happened after' : '');
+  const view = t.entry_view ? mergeAfter(t.entry_view, t.chart) : barsToView(t.chart || []);
+  const used = f.zone_top != null ? {top: f.zone_top, bottom: f.zone_bottom} : null;
+  const hl = used && view.t.length ? {t0: TiimChart.ts(view.t[0]), t1: TiimChart.ts(t.opened_at), top: used.top, bottom: used.bottom,
+    fill: 'rgba(0,0,0,0)', stroke: css('--ink'), text: css('--ink'), label: 'zone TIIM traded'} : null;
+  if (DETAIL_CHART) DETAIL_CHART.destroy();
+  DETAIL_CHART = TiimChart.render($('dChart'), view, {trades: [t], colors: chartColors(), focus: t.opened_at, focusEnd: t.closed_at, highlightZone: hl});
+
+  const risk = Math.abs(t.entry - t.stop);
+  const px = (x) => x == null ? '—' : (+x).toPrecision(6);
+  const box = (title, html) => `<div class="box"><h3>${title}</h3>${html}</div>`;
+  const news = f.news_state && f.news_state !== 'clear'
+    ? `<p>${esc(f.news_state.replace('_', ' '))}: ${esc(f.news_kind)}${f.news_title ? ` (“${esc(f.news_title)}”)` : ''}. ` +
+      `${f.news_agree === 'with' ? 'The news pointed the same way as the trade.' : f.news_agree === 'against' ? 'The news pointed the other way.' : ''}</p>`
+    : '<p>No market-moving news at the time. The decision was pure price action.</p>';
+  const setup = [];
+  if (f.zone_top != null) setup.push(`${f.zone_fresh ? 'Fresh' : 'Previously tested'} zone ${px(f.zone_bottom)}–${px(f.zone_top)}, left with a ${f.zone_strength}× ATR impulse.`);
+  if (f.divergence) setup.push(`${esc(f.divergence.replace('_', ' '))} divergence on ${esc((f.oscillator || '').toUpperCase())}.`);
+  if (f.with_structure != null) setup.push(f.with_structure ? 'Traded with the swing structure.' : 'Traded against the swing structure (reversal).');
+  if (f.confluence > 1) setup.push(`${f.confluence} strategies agreed on this direction.`);
+  if (f.earnings_phase) setup.push(`Earnings ${f.earnings_phase === 'pre' ? 'run-up' : 'drift'} setup.`);
+  $('dWhy').innerHTML = [
+    box('The setup', `<p class="big"><b>${esc(s.title || t.strategy)}</b>${TAG_TEXT[t.strategy] ? `: ${TAG_TEXT[t.strategy]}` : ''}</p>` +
+      `<p>${esc(t.reason || '')}</p>${setup.map(x => `<p>${x}</p>`).join('')}` +
+      (s.description ? `<p class="muted">${esc(s.description)}</p>` : '')),
+    box('The market at entry', `<p>Structure: <b>${esc(f.structure || '—')}</b>${f.structure_seq ? ` (${esc(f.structure_seq)})` : ''}</p>` +
+      `<p>Higher-timeframe bias: <b>${esc(f.bias || '—')}</b> (EMA 50 vs 200)</p><p>Regime: ${esc(f.regime || '—')} · session ${esc(f.session || '—')}</p>` +
+      `<p>RSI ${f.rsi ?? '—'} (${esc(f.rsi_zone || '')})</p>`),
+    box('News', news),
+    box('Risk plan', `<p>Entry <b>${px(t.entry)}</b> · stop <b>${px(t.stop)}</b> · target <b>${px(t.take_profit)}</b></p>` +
+      `<p>Wrong if price reaches ${px(t.stop)} (${px(risk)} away). Target is 3× that distance.</p>` +
+      `<p>${t.shadow ? 'Virtual trade: no money at risk.' : `Risked ${fmtPct(t.risk_pct, 2)} of the account (${fmtNum(t.risk_amount)}).`}</p>`),
+    box("TIIM's odds", `<p>Estimated win chance <b>${d.p != null ? fmtPct(d.p, 0) : '—'}</b>, expected result <b>${fmtR(d.expected_r)}</b> per trade, ` +
+      `based on its record for ${esc((d.stat_key || t.strategy).replace('|', ' in '))}.</p>` +
+      `<p class="muted">${(d.why || []).map(esc).join(' · ')}</p>`),
+    box(t.status === 'open' ? 'So far' : 'Outcome', `<p>${t.status === 'open' ? 'Open' : `Closed ${fmtR(t.r_multiple)}${t.pnl ? ` (${fmtNum(t.pnl)})` : ''}`}` +
+      ` · best ${fmtR(t.mfe_r)} · worst ${fmtR(-(t.mae_r || 0))}</p>` +
+      ((pm.notes || []).map(x => `<p class="muted">• ${esc(x)}</p>`).join('') || '')),
+  ].join('');
   $('detail').scrollIntoView({behavior: 'smooth'});
 }
 

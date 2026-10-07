@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS news (
 CREATE INDEX IF NOT EXISTS news_ts ON news(ts);
 """
 
-JSON_COLS = {"features", "decision", "postmortem", "chart", "watch"}
+JSON_COLS = {"features", "decision", "postmortem", "chart", "watch", "entry_view"}
+# Columns added after the first release; created on existing databases at start-up.
+MIGRATIONS = ["ALTER TABLE trades ADD COLUMN entry_view TEXT"]
 
 
 def now_iso() -> str:
@@ -48,6 +50,11 @@ class Journal:
         self.conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        for sql in MIGRATIONS:
+            try:
+                self.conn.execute(sql)
+            except sqlite3.OperationalError:
+                pass  # already applied
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.commit()
 

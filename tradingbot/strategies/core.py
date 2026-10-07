@@ -53,7 +53,7 @@ class SupplyDemandReversal(Strategy):
             stop = z.bottom - buf if side == "buy" else z.top + buf
             return self._signal(
                 ctx, side, stop, f"{kind} zone retest ({z.bottom:.5f}-{z.top:.5f}), rejection candle",
-                zone_fresh=z.fresh, zone_strength=round(z.impulse_atr, 2),
+                zone_fresh=z.fresh, zone_strength=round(z.impulse_atr, 2), zone_top=z.top, zone_bottom=z.bottom,
                 with_structure=(side == "buy" and ctx.trend.startswith("up")) or (side == "sell" and ctx.trend.startswith("down")),
             )
         return None

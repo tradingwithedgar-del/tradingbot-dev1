@@ -22,7 +22,15 @@ from .strategies import Signal, Strategy, load_library
 
 log = logging.getLogger(__name__)
 CHART_PRE_BARS = 60
-CHART_MAX_BARS = 260
+CHART_MAX_BARS = 2000   # ~20 days of 15m candles per trade
+
+
+def _trim_chart(rows: list) -> list:
+    """Keep the candles before entry and the most recent ones; never drop the start of a trade
+    unless it has run for weeks."""
+    if len(rows) <= CHART_MAX_BARS:
+        return rows
+    return rows[:CHART_PRE_BARS] + rows[-(CHART_MAX_BARS - CHART_PRE_BARS):]
 
 
 def _bar_row(ts: pd.Timestamp, bar: pd.Series) -> list:
@@ -275,7 +283,7 @@ class Agent:
         t["mfe_r"] = max(t["mfe_r"] or 0.0, float(fav))
         t["mae_r"] = max(t["mae_r"] or 0.0, float(adv))
         self.j.update_trade(t["id"], mfe_r=t["mfe_r"], mae_r=t["mae_r"], bars_held=(t["bars_held"] or 0) + 1,
-                            chart=chart[-CHART_MAX_BARS:])
+                            chart=_trim_chart(chart))
 
     def _sync_closed_positions(self) -> None:
         open_ids = {p.id for p in self.broker.open_positions()}
@@ -390,16 +398,22 @@ class Agent:
     def _advance_watchers(self, ctx: MarketContext) -> None:
         bar = ctx.bar
         for t in self.j.watching_trades():
-            if t["symbol"] != ctx.symbol or (t["closed_at"] or "") >= ctx.time.isoformat():
+            if t["symbol"] != ctx.symbol or (t["closed_at"] or "") > ctx.time.isoformat():
+                continue
+            if (t["closed_at"] or "") == ctx.time.isoformat():
+                # the candle the trade closed in: keep it on the chart, but don't judge "after exit" with it
+                rows = t.get("chart") or []
+                if not rows or rows[-1][0] != ctx.time.isoformat():
+                    self.j.update_trade(t["id"], chart=_trim_chart(rows + [_bar_row(ctx.time, ctx.bar)]))
                 continue
             w = pm.update_watch(t, t["watch"], float(bar["high"]), float(bar["low"]))
             chart = (t.get("chart") or []) + [_bar_row(ctx.time, bar)]
             resolved_loss = (t["r_multiple"] or 0) < 0 and (w["hit_target"] or w["beyond_stop"])
             if w["bars"] < self.s.learning.postmortem_watch_bars and not resolved_loss:
-                self.j.update_trade(t["id"], watch=w, chart=chart[-CHART_MAX_BARS:])
+                self.j.update_trade(t["id"], watch=w, chart=_trim_chart(chart))
                 continue
             tags = pm.final_tags(t, w)
-            self.j.update_trade(t["id"], watch=None, chart=chart[-CHART_MAX_BARS:],
+            self.j.update_trade(t["id"], watch=None, chart=_trim_chart(chart),
                                 postmortem={"tags": tags, "notes": pm.explain(tags), "final": True, "after_exit": w})
             strat = self._strategy(t["strategy"])
             if strat is not None:
@@ -512,7 +526,7 @@ class Agent:
             shadow=0, symbol=sig.symbol, strategy=sig.strategy, experimental=int(sig.experimental), side=sig.side,
             opened_at=ctx.time.isoformat(), entry=sig.entry, stop=sig.stop, take_profit=sig.take_profit, qty=size.qty,
             risk_amount=size.risk_amount, risk_pct=size.risk_pct, reason=sig.reason, features=sig.features,
-            decision=dec, broker_id=pid, chart=self._chart(ctx),
+            decision=dec, broker_id=pid, chart=self._chart(ctx), entry_view=self._entry_view(ctx),
         )
         self.j.event("trade", f"#{tid} OPEN {sig.strategy} {sig.symbol} {sig.side} risk {size.risk_pct:.1%} "
                               f"({size.risk_amount:.2f}) - {sig.reason}", {"trade_id": tid}, ts=ctx.time.isoformat())
@@ -526,6 +540,15 @@ class Agent:
             opened_at=ctx.time.isoformat(), entry=entry, stop=sig.stop, take_profit=sig.take_profit, qty=0,
             risk_amount=0, risk_pct=0, reason=sig.reason, features=sig.features, decision=dec, chart=self._chart(ctx),
         )
+
+    @staticmethod
+    def _entry_view(ctx: MarketContext) -> dict | None:
+        """Exactly what TIIM saw when it took the trade (zones, swings, indicators), for the dashboard."""
+        try:
+            return chart_view(ctx, bars=120)
+        except Exception:
+            log.exception("entry snapshot failed")
+            return None
 
     @staticmethod
     def _chart(ctx: MarketContext) -> list:

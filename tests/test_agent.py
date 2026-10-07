@@ -34,3 +34,23 @@ def test_targets_are_3r(tmp_path):
     for t in trades:
         planned_r = abs(t["take_profit"] - t["stop"]) / 4
         assert abs(abs(t["entry"] - t["stop"]) - planned_r) <= t["entry"] * 1e-4
+
+
+def test_real_trades_keep_entry_snapshot_and_full_candle_history(tmp_path):
+    import pandas as pd
+
+    from tradingbot.agent import CHART_MAX_BARS, CHART_PRE_BARS, _trim_chart
+
+    rows = [[str(i)] for i in range(CHART_MAX_BARS + 500)]
+    kept = _trim_chart(rows)
+    assert len(kept) == CHART_MAX_BARS and kept[:CHART_PRE_BARS] == rows[:CHART_PRE_BARS] and kept[-1] == rows[-1]
+
+    data = {"A": synthetic(1500, 18000, seed=11)}
+    j = run_backtest(data, Settings(), db_path=tmp_path / "bt.db", seed=3)
+    real = [t for t in j.trades("mode='backtest' AND shadow=0 AND status='closed'")]
+    assert real
+    for t in real:
+        assert t["entry_view"] and t["entry_view"]["t"][-1] <= t["opened_at"]   # snapshot is from entry time
+        times = [pd.Timestamp(r[0]) for r in t["chart"]]
+        assert all((b - a).total_seconds() == 900 for a, b in zip(times, times[1:]))  # no missing candles
+        assert any(r[0] == t["closed_at"] for r in t["chart"])                        # exit candle recorded
