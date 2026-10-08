@@ -54,3 +54,29 @@ def test_real_trades_keep_entry_snapshot_and_full_candle_history(tmp_path):
         times = [pd.Timestamp(r[0]) for r in t["chart"]]
         assert all((b - a).total_seconds() == 900 for a, b in zip(times, times[1:]))  # no missing candles
         assert any(r[0] == t["closed_at"] for r in t["chart"])                        # exit candle recorded
+
+
+def test_why_report_explains_blocked_setups(tmp_path):
+    import pandas as pd
+
+    from tradingbot.diagnose import report
+    from tradingbot.journal import Journal
+
+    s = Settings()
+    s.mode = "demo"
+    s.symbols = ["USTECH", "NVDA"]
+    s.db_path = tmp_path / "w.db"
+    j = Journal(s.db_path, mode="demo")
+    now = pd.Timestamp("2026-10-07 20:00", tz="UTC")
+    j.set("last_bar:demo", {"USTECH": "2026-10-07T19:30:00+00:00"})
+    common = dict(shadow=1, symbol="USTECH", side="buy", opened_at="2026-10-07T15:00:00+00:00", entry=1, stop=0.9,
+                  take_profit=1.3, qty=0, risk_amount=0, risk_pct=0, reason="x", features={})
+    j.open_trade(strategy="sd_reversal", decision={"why": ["demo: Thompson-sampled win rate", "expected +0.20R",
+                                                           "major news points the other way: Iran strikes"]}, **common)
+    j.open_trade(strategy="divergence", decision={"why": ["demo: Thompson-sampled win rate", "expected -0.10R not positive"]}, **common)
+    j.open_trade(strategy="exp_1234abcd", experimental=1, decision={"why": ["experimental genome in shadow stage"]}, **common)
+    j.event("error", "order failed USTECH buy: rejected", ts="2026-10-07T16:00:00+00:00")
+    text = report(j, s, now)
+    assert "real trades opened:            0" in text and "blocked / passed on (virtual): 2" in text
+    assert "major news pointed against the trade" in text and "not profitable enough" in text
+    assert "NVDA     never" in text and "order failed" in text

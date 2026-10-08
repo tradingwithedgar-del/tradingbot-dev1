@@ -7,6 +7,7 @@
     python -m tiim backtest --csv EURUSD=data/eurusd_15m.csv
     python -m tiim backtest --tradelocker --days 60
     python -m tiim dashboard           # http://localhost:8000
+    python -m tiim why                 # what TIIM did in the last 24h and why it did/didn't trade
     python -m tiim status
     python -m tiim stop | resume
 """
@@ -204,6 +205,14 @@ def cmd_status(args) -> None:
         print(f"  {e['ts']} [{e['kind']}] {e['message']}")
 
 
+def cmd_why(args) -> None:
+    from .diagnose import report
+    from .journal import Journal
+
+    s = Settings()
+    print(report(Journal(args.db or s.db_path, mode=s.mode), s, hours=args.hours))
+
+
 def cmd_stop(args) -> None:
     s = Settings()
     s.stop_file.parent.mkdir(parents=True, exist_ok=True)
@@ -253,6 +262,10 @@ def main() -> None:
     st = sub.add_parser("status")
     st.add_argument("--db", default=None)
     st.set_defaults(fn=cmd_status)
+    w = sub.add_parser("why", help="what TIIM did recently and why it did or didn't trade")
+    w.add_argument("--hours", type=int, default=24)
+    w.add_argument("--db", default=None)
+    w.set_defaults(fn=cmd_why)
     sub.add_parser("stop").set_defaults(fn=cmd_stop)
     sub.add_parser("resume").set_defaults(fn=cmd_resume)
     args = p.parse_args()
