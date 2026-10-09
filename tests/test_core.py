@@ -245,3 +245,33 @@ def test_default_symbols_are_the_requested_markets(monkeypatch):
     monkeypatch.delenv("BOT_SYMBOLS", raising=False)
     assert Settings().symbols == ["US30", "US500", "USTECH", "XAUUSD", "NVDA", "AAPL", "TSLA", "XTIUSD",
                                   "BTCUSD", "ETHUSD", "SOLUSD"]
+
+
+def test_open_trade_limits_demo_live_and_env(monkeypatch):
+    from tradingbot.config import Settings
+
+    for k in ("MAX_OPEN_TRADES", "MAX_OPEN_RISK", "MAX_SAME_GROUP"):
+        monkeypatch.delenv(k, raising=False)
+    assert (Settings(mode="demo").risk.max_open_trades, Settings(mode="demo").risk.max_total_open_risk) == (5, 0.20)
+    assert (Settings(mode="live").risk.max_open_trades, Settings(mode="live").risk.max_total_open_risk) == (2, 0.10)
+    monkeypatch.setenv("MAX_OPEN_TRADES", "4")
+    monkeypatch.setenv("MAX_OPEN_RISK", "15")
+    s = Settings(mode="live")
+    assert (s.risk.max_open_trades, s.risk.max_total_open_risk) == (4, 0.15)
+
+
+def test_correlated_trades_are_capped(tmp_path):
+    from tradingbot.backtest import run_backtest, synthetic
+    from tradingbot.config import Settings
+    from tradingbot.news.assets import asset_class
+
+    s = Settings(mode="backtest")
+    s.risk.max_open_trades, s.risk.max_total_open_risk, s.risk.max_same_group = 6, 0.30, 1
+    data = {k: synthetic(900, 18000 + i * 1000, seed=20 + i) for i, k in enumerate(["US30", "US500", "USTECH"])}
+    j = run_backtest(data, s, db_path=tmp_path / "c.db", seed=5)
+    real = j.trades("mode='backtest' AND shadow=0")
+    for a in real:
+        overlap = [b for b in real if b["id"] != a["id"] and b["side"] == a["side"]
+                   and asset_class(b["symbol"]) == asset_class(a["symbol"])
+                   and b["opened_at"] <= a["opened_at"] < (b["closed_at"] or "9")]
+        assert not overlap

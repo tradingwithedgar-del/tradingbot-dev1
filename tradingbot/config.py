@@ -32,6 +32,9 @@ class RiskConfig:
     # Survival rules. A sequence of 5% losses compounds fast; these stop the bleeding.
     max_open_trades: int = 2
     max_total_open_risk: float = 0.10   # never more than 10% of equity at risk at once
+    # Correlated markets (e.g. US30/US500/USTECH) move together: at most this many open trades
+    # in the same asset class AND direction, so "5 trades" is never really one big bet.
+    max_same_group: int = 2
     daily_loss_limit: float = 0.10      # stop opening trades for the day after -10%
     max_drawdown_halt: float = 0.30     # full halt at -30% from peak; needs a human `resume`
     # As drawdown grows, risk per trade is scaled down linearly towards min_risk_per_trade.
@@ -131,6 +134,21 @@ class Settings:
     tl_server: str = field(default_factory=lambda: os.getenv("TL_SERVER", ""))
     tl_acc_num: int = field(default_factory=lambda: int(os.getenv("TL_ACC_NUM") or 0))
 
+    # The demo account trades more at once so TIIM gets more samples to learn from.
+    DEMO_LIMITS = {"max_open_trades": 5, "max_total_open_risk": 0.20}
+
+    def __post_init__(self) -> None:
+        if self.mode == "demo":
+            for k, v in self.DEMO_LIMITS.items():
+                setattr(self.risk, k, v)
+        # Explicit overrides from .env win over both defaults (risk given in %, e.g. MAX_OPEN_RISK=20).
+        if os.getenv("MAX_OPEN_TRADES"):
+            self.risk.max_open_trades = int(os.getenv("MAX_OPEN_TRADES"))
+        if os.getenv("MAX_OPEN_RISK"):
+            self.risk.max_total_open_risk = float(os.getenv("MAX_OPEN_RISK")) / 100
+        if os.getenv("MAX_SAME_GROUP"):
+            self.risk.max_same_group = int(os.getenv("MAX_SAME_GROUP"))
+
     @property
     def is_live(self) -> bool:
         return self.mode == "live"
@@ -154,5 +172,7 @@ class Settings:
                 raise RuntimeError("BOT_MODE=live but TL_ENVIRONMENT points at the demo server.")
         if self.mode == "demo" and "live" in self.tl_environment:
             raise RuntimeError("BOT_MODE=demo but TL_ENVIRONMENT points at the live server.")
+        if not 1 <= self.risk.max_open_trades <= 10 or not 0 < self.risk.max_total_open_risk <= 0.30:
+            raise ValueError("MAX_OPEN_TRADES must be 1-10 and MAX_OPEN_RISK at most 30(%).")
         if not 0 < self.risk.risk_per_trade <= 0.05:
             raise ValueError("risk_per_trade must be in (0, 5%].")

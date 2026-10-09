@@ -18,6 +18,7 @@ from .journal import Journal
 from .learning import Learner
 from .risk import RiskManager
 from .learning import CANDIDATE
+from .news.assets import asset_class
 from .strategies import Signal, Strategy, load_library
 
 log = logging.getLogger(__name__)
@@ -498,6 +499,10 @@ class Agent:
         limit = self.risk.check_limits(equity, peak, self._day_start(equity), open_risk, len(open_real))
         if limit:
             return limit
+        group = asset_class(sig.symbol)
+        same = sum(1 for t in open_real if t["side"] == sig.side and asset_class(t["symbol"]) == group)
+        if same >= self.s.risk.max_same_group:
+            return f"correlated: already {same} {sig.side} trades open in {group}"
         now = None if hasattr(self.broker, "now") else pd.Timestamp.now(tz="UTC")
         return self.compliance.check(sig.side, sig.symbol, sig.entry, sig.stop, ctx.close, ctx.atr_now, quote,
                                      self.broker.open_positions(), now)
