@@ -1,7 +1,9 @@
 """Self-built indicator strategies (demo account only).
 
 Each experimental strategy is a "genome": 2-4 entry conditions picked from an
-indicator library plus a stop rule. The learner breeds new genomes, keeps the ones
+indicator library plus a stop rule. A genome is either a "swing" trade (normal stop, the
+account's 3R target) or a "scalp" on the same 15m chart: tighter stop (never under the
+compliance floor of 0.5 ATR), a 1-2R target and a time stop that closes it after a few candles. The learner breeds new genomes, keeps the ones
 with positive expectancy and retires the losers. They start as shadow (virtual)
 trades, can be promoted to real demo trades, and can only reach the live account
 after a human approves them by name.
@@ -81,24 +83,38 @@ class Genome:
     stop_atr: float = 1.5
     generation: int = 0
     parent: str = ""
+    style: str = "swing"        # "swing" | "scalp"
+    target_r: float = 0.0       # scalp only: target in R (swing uses the account's reward multiple)
+    max_bars: int = 0           # scalp only: close after this many candles if neither stop nor target hit
 
     def to_json(self) -> str:
         return json.dumps({"conditions": self.conditions, "stop_mode": self.stop_mode, "stop_atr": self.stop_atr,
-                           "generation": self.generation, "parent": self.parent}, sort_keys=True)
+                           "generation": self.generation, "parent": self.parent, "style": self.style,
+                           "target_r": self.target_r, "max_bars": self.max_bars}, sort_keys=True)
 
     @classmethod
     def from_json(cls, s: str) -> "Genome":
         d = json.loads(s)
-        return cls([(c[0], c[1]) for c in d["conditions"]], d["stop_mode"], d["stop_atr"], d.get("generation", 0), d.get("parent", ""))
+        return cls([(c[0], c[1]) for c in d["conditions"]], d["stop_mode"], d["stop_atr"], d.get("generation", 0),
+                    d.get("parent", ""), d.get("style", "swing"), d.get("target_r", 0.0), d.get("max_bars", 0))
+
+    @property
+    def scalp(self) -> bool:
+        return self.style == "scalp"
 
     @property
     def gid(self) -> str:
-        body = json.dumps({"c": self.conditions, "m": self.stop_mode, "s": round(self.stop_atr, 2)}, sort_keys=True)
-        return "exp_" + hashlib.sha1(body.encode()).hexdigest()[:8]
+        body = {"c": self.conditions, "m": self.stop_mode, "s": round(self.stop_atr, 2)}
+        if self.scalp:   # swing genomes keep the ids they had before scalps existed
+            body.update(t=round(self.target_r, 2), b=self.max_bars)
+        return "exp_" + hashlib.sha1(json.dumps(body, sort_keys=True).encode()).hexdigest()[:8]
 
     def describe(self) -> str:
         parts = [f"{n}({', '.join(f'{k}={v}' for k, v in p.items())})" if p else n for n, p in self.conditions]
-        return " AND ".join(parts) + f" | stop={self.stop_mode}:{self.stop_atr:.2f}ATR"
+        text = " AND ".join(parts) + f" | stop={self.stop_mode}:{self.stop_atr:.2f}ATR"
+        if self.scalp:
+            text = "SCALP " + text + f" | target {self.target_r:.1f}R | out after {self.max_bars} candles"
+        return text
 
 
 def _rand_params(rng: random.Random, spec: dict) -> dict:
@@ -108,9 +124,21 @@ def _rand_params(rng: random.Random, spec: dict) -> dict:
     return out
 
 
+# Scalp ranges. The stop floor stays above the compliance minimum (0.5 ATR) so a scalp is a real
+# trade with a real stop, never latency/tick scalping (PlexyTrade forbids that kind of trading).
+SCALP_STOP_ATR = (0.6, 1.0)
+SCALP_TARGET_R = (1.0, 2.0)
+SCALP_MAX_BARS = (2, 8)          # 30 min - 2 h on the 15m chart
+SCALP_SHARE = 0.35               # share of brand-new genomes that are scalps
+
+
 def random_genome(rng: random.Random) -> Genome:
     names = rng.sample(sorted(CONDITIONS), rng.randint(2, 4))
-    return Genome([(n, _rand_params(rng, CONDITIONS[n])) for n in names], rng.choice(["atr", "swing"]), round(rng.uniform(1.0, 2.5), 2))
+    conds = [(n, _rand_params(rng, CONDITIONS[n])) for n in names]
+    if rng.random() < SCALP_SHARE:
+        return Genome(conds, "atr", round(rng.uniform(*SCALP_STOP_ATR), 2), style="scalp",
+                      target_r=round(rng.uniform(*SCALP_TARGET_R), 1), max_bars=rng.randint(*SCALP_MAX_BARS))
+    return Genome(conds, rng.choice(["atr", "swing"]), round(rng.uniform(1.0, 2.5), 2))
 
 
 def mutate(g: Genome, rng: random.Random) -> Genome:
@@ -130,6 +158,12 @@ def mutate(g: Genome, rng: random.Random) -> Genome:
             conds.append((n, _rand_params(rng, CONDITIONS[n])))
     elif roll < 0.75 and len(conds) > 2:
         conds.pop(rng.randrange(len(conds)))
+    if g.scalp:
+        lo, hi = SCALP_STOP_ATR
+        stop_atr = round(min(hi, max(lo, g.stop_atr * rng.uniform(0.85, 1.15))), 2)
+        target = round(min(SCALP_TARGET_R[1], max(SCALP_TARGET_R[0], g.target_r + rng.choice([-0.2, 0, 0.2]))), 1)
+        bars = min(SCALP_MAX_BARS[1], max(SCALP_MAX_BARS[0], g.max_bars + rng.choice([-1, 0, 1])))
+        return Genome(conds, "atr", stop_atr, g.generation + 1, g.gid, "scalp", target, bars)
     stop_atr = round(min(3.0, max(0.8, g.stop_atr * rng.uniform(0.85, 1.15))), 2)
     stop_mode = g.stop_mode if rng.random() > 0.15 else ("swing" if g.stop_mode == "atr" else "atr")
     return Genome(conds, stop_mode, stop_atr, g.generation + 1, g.gid)
@@ -159,5 +193,8 @@ class ExperimentalStrategy(Strategy):
                 else:
                     dist = self.genome.stop_atr * a
                 stop = ctx.close - dist if side == "buy" else ctx.close + dist
-                return self._signal(ctx, side, stop, self.genome.describe())
+                sig = self._signal(ctx, side, stop, self.genome.describe())
+                if sig is not None and self.genome.scalp:
+                    sig.reward_multiple, sig.max_bars = self.genome.target_r, self.genome.max_bars
+                return sig
         return None

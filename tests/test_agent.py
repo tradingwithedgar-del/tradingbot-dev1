@@ -29,7 +29,7 @@ def test_targets_are_3r(tmp_path):
     j = run_backtest(data, Settings(), db_path=tmp_path / "bt.db", seed=4)
     # Target is 3R from the signal price: |TP - SL| == 4R. Shadow entries are shifted by half the
     # spread (realistic cost), so compare the planned R with the recorded entry within that spread.
-    trades = j.trades("mode='backtest' AND shadow=1")
+    trades = [t for t in j.trades("mode='backtest' AND shadow=1") if not t["features"].get("max_bars")]  # scalps differ
     assert trades
     for t in trades:
         planned_r = abs(t["take_profit"] - t["stop"]) / 4
@@ -80,3 +80,31 @@ def test_why_report_explains_blocked_setups(tmp_path):
     assert "real trades opened:            0" in text and "blocked / passed on (virtual): 2" in text
     assert "major news pointed against the trade" in text and "not profitable enough" in text
     assert "NVDA     never" in text and "order failed" in text
+
+
+def test_scalps_use_own_target_tight_stop_and_time_stop(tmp_path):
+    import random
+
+    from tradingbot.learning import Learner
+    from tradingbot.strategies.experimental import SCALP_MAX_BARS, Genome, mutate, random_genome
+
+    rng = random.Random(1)
+    scalps = [g for g in (random_genome(rng) for _ in range(200)) if g.scalp]
+    assert scalps
+    for g in scalps + [mutate(g, rng) for g in scalps]:
+        assert g.scalp and 0.6 <= g.stop_atr <= 1.0 and 1.0 <= g.target_r <= 2.0 and 2 <= g.max_bars <= 8
+        assert Genome.from_json(g.to_json()).gid == g.gid and "SCALP" in g.describe()
+    old = Genome([("in_zone", {}), ("structure_with", {})], "atr", 1.5)
+    assert Genome.from_json('{"conditions": [["in_zone", {}], ["structure_with", {}]], "stop_mode": "atr", "stop_atr": 1.5}').gid == old.gid
+
+    data = {"A": synthetic(1500, 1.10, seed=7)}
+    s = Settings(mode="backtest")
+    j = run_backtest(data, s, db_path=tmp_path / "s.db", seed=6)
+    learner = Learner(j, s.learning, s.risk, live=False)
+    done = [t for t in j.trades("mode='backtest' AND status='closed'") if t["features"].get("max_bars")]
+    assert done, "scalp genomes should have traded"
+    for t in done:
+        r_plan = abs(t["take_profit"] - t["entry"]) / (abs(t["entry"] - t["stop"]) or 1)
+        assert r_plan < 2.3 and learner.rr_for(t["strategy"]) <= 2.0
+        assert t["bars_held"] <= max(SCALP_MAX_BARS) + 1
+    assert any(t["bars_held"] >= t["features"]["max_bars"] and abs(t["r_multiple"]) < 0.99 for t in done)

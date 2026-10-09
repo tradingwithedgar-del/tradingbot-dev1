@@ -113,6 +113,10 @@ Every time a bar closes, for each symbol the agent:
   stacks, MACD turns, Bollinger touches, stochastic crosses, ADX, zones, structure, momentum candles).
   New ones start as shadow trades. Those reaching +0.3R/trade over 20 trades are promoted to real demo
   trades; losers are retired and replaced by mutations of the best or new random ideas.
+  About a third of new experiments are **scalps** on the same 15m chart: stop 0.6-1 ATR (never under
+  the 0.5 ATR compliance floor), target 1-2R, and a time stop that closes the trade after 2-8 candles
+  (30 min - 2 h). They follow the same shadow -> demo -> your-approval path, and TIIM judges each one
+  against its own target, not the 3R one.
   After 30 profitable real demo trades, a strategy becomes a **live candidate** and the journal asks for
   your approval. **No experiment ever reaches the live account on its own.** You add it to
   `LIVE_APPROVED_STRATEGIES`.

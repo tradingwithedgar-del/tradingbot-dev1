@@ -231,6 +231,15 @@ class Agent:
             self._update_excursions(t, ctx)
             if self._news_guard(t, ctx, dec):
                 continue
+            if self._time_up(t) and not dec.get("closed_by_agent"):
+                try:
+                    self.broker.close_position(t["broker_id"])
+                    dec["closed_by_agent"] = f"time stop: scalp still open after {t['bars_held']} candles"
+                    self.j.update_trade(t["id"], decision=dec)
+                    self.j.event("manage", f"#{t['id']} {t['symbol']} {dec['closed_by_agent']} - closed", ts=self.now())
+                except Exception:  # pragma: no cover - network
+                    log.exception("time stop failed for #%s", t["id"])
+                continue
             be_at = self.learner.breakeven.get(t["strategy"])
             if be_at and not dec.get("breakeven_moved") and (t["mfe_r"] or 0) >= be_at:
                 try:
@@ -283,8 +292,15 @@ class Agent:
         chart.append(_bar_row(ctx.time, bar))
         t["mfe_r"] = max(t["mfe_r"] or 0.0, float(fav))
         t["mae_r"] = max(t["mae_r"] or 0.0, float(adv))
-        self.j.update_trade(t["id"], mfe_r=t["mfe_r"], mae_r=t["mae_r"], bars_held=(t["bars_held"] or 0) + 1,
+        t["bars_held"] = (t["bars_held"] or 0) + 1
+        self.j.update_trade(t["id"], mfe_r=t["mfe_r"], mae_r=t["mae_r"], bars_held=t["bars_held"],
                             chart=_trim_chart(chart))
+
+    @staticmethod
+    def _time_up(t: dict) -> bool:
+        """Scalps have a time stop: out after max_bars candles if neither stop nor target was hit."""
+        n = int((t.get("features") or {}).get("max_bars") or 0)
+        return n > 0 and (t["bars_held"] or 0) >= n
 
     def _sync_closed_positions(self) -> None:
         open_ids = {p.id for p in self.broker.open_positions()}
@@ -391,6 +407,8 @@ class Agent:
                     exit_price = t["stop"]
                 elif lo <= t["take_profit"]:
                     exit_price = t["take_profit"]
+            if exit_price is None and self._time_up(t):
+                exit_price = float(bar["close"])
             if exit_price is not None:
                 d = 1 if t["side"] == "buy" else -1
                 r = (exit_price - t["entry"]) * d / (abs(t["entry"] - t["stop"]) or 1e-12)
@@ -436,7 +454,9 @@ class Agent:
                 log.exception("strategy %s failed", strat.name)
                 continue
             if sig is not None and sig.risk_distance > 0:
-                sig.set_target(self.s.risk.reward_multiple)
+                sig.set_target(sig.reward_multiple or self.s.risk.reward_multiple)
+                if sig.max_bars:
+                    sig.features["max_bars"] = sig.max_bars
                 signals.append(sig)
         if not signals:
             return

@@ -194,21 +194,30 @@ class Learner:
             a, b = st.p_params(self.cfg)
             p = self.rng.betavariate(a, b)      # explore on demo
             reasons.append("demo: Thompson-sampled win rate")
-        er = st.expected_r(p, self.rr)
+        er = st.expected_r(p, self.rr_for(s))
         if er <= self.cfg.min_expected_r:
             return Decision("shadow", p, er, key, reasons + [f"expected {er:+.2f}R not positive"])
         return Decision("trade", p, er, key, reasons + [f"expected {er:+.2f}R"])
 
     # --- learned filters ---------------------------------------------------------------
+    def rr_for(self, strategy: str) -> float:
+        """Planned reward multiple: a scalp genome's own target, else the account's (3R)."""
+        info = self.population.get(strategy.split(CANDIDATE)[0])
+        if info:
+            g = Genome.from_json(info["genome"])
+            if g.scalp:
+                return g.target_r
+        return self.rr
+
     def _refresh_filters(self, strategy: str) -> None:
-        breakeven_p = 1.0 / (1.0 + self.rr)
+        breakeven_p = 1.0 / (1.0 + self.rr_for(strategy))
         old = set(self.filters.get(strategy, []))
         new = set()
         prefix = f"{strategy}|"
         for key, st in self.stats.items():
             if not key.startswith(prefix) or key == f"{strategy}|real" or st.count < self.cfg.filter_min_samples:
                 continue
-            exp = st.expected_r(st.p_mean(self.cfg), self.rr)
+            exp = st.expected_r(st.p_mean(self.cfg), self.rr_for(strategy))
             if exp < self.cfg.filter_max_expectancy and st.p_quantile(self.cfg, 1.0) < breakeven_p:
                 new.add(key[len(prefix):])
         for c in sorted(new - old):
@@ -336,7 +345,7 @@ class Learner:
             st = self.stats.get(gid)
             if st is None or st.count < self.cfg.promote_min_trades:
                 continue
-            exp = st.expected_r(st.p_mean(self.cfg), self.rr)
+            exp = st.expected_r(st.p_mean(self.cfg), self.rr_for(gid))
             info["expectancy"] = round(exp, 3)
             if exp < self.cfg.retire_max_expectancy:
                 info["status"] = "retired"
@@ -346,7 +355,7 @@ class Learner:
                 self.j.event("evolution", f"promoted {gid} to real demo trades ({exp:+.2f}R over {st.count} shadow trades)", info)
             elif info["status"] == "demo":
                 real = self.stats.get(f"{gid}|real")
-                if real and real.count >= self.cfg.live_candidate_min_trades and real.expected_r(real.p_mean(self.cfg), self.rr) > 0.2:
+                if real and real.count >= self.cfg.live_candidate_min_trades and real.expected_r(real.p_mean(self.cfg), self.rr_for(gid)) > 0.2:
                     info["status"] = "live_candidate"
                     self.j.event("approval_needed",
                                  f"{gid} is a LIVE CANDIDATE: {Genome.from_json(info['genome']).describe()} - add it to LIVE_APPROVED_STRATEGIES to allow it on live",

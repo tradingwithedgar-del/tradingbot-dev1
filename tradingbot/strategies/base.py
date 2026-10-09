@@ -16,6 +16,8 @@ class Signal:
     reason: str = ""
     features: dict = field(default_factory=dict)
     experimental: bool = False
+    reward_multiple: float | None = None   # None = the account's target (3R); scalps set their own
+    max_bars: int | None = None            # time stop: close after this many candles
 
     @property
     def risk_distance(self) -> float:
