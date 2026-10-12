@@ -142,6 +142,9 @@ class Settings:
             for k, v in self.DEMO_LIMITS.items():
                 setattr(self.risk, k, v)
         # Explicit overrides from .env win over both defaults (risk given in %, e.g. MAX_OPEN_RISK=20).
+        if os.getenv("RISK_PER_TRADE"):
+            self.risk.risk_per_trade = float(os.getenv("RISK_PER_TRADE")) / 100
+            self.risk.min_risk_per_trade = min(self.risk.min_risk_per_trade, self.risk.risk_per_trade)
         if os.getenv("MAX_OPEN_TRADES"):
             self.risk.max_open_trades = int(os.getenv("MAX_OPEN_TRADES"))
         if os.getenv("MAX_OPEN_RISK"):

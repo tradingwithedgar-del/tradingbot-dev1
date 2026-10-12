@@ -250,7 +250,7 @@ def test_default_symbols_are_the_requested_markets(monkeypatch):
 def test_open_trade_limits_demo_live_and_env(monkeypatch):
     from tradingbot.config import Settings
 
-    for k in ("MAX_OPEN_TRADES", "MAX_OPEN_RISK", "MAX_SAME_GROUP"):
+    for k in ("MAX_OPEN_TRADES", "MAX_OPEN_RISK", "MAX_SAME_GROUP", "RISK_PER_TRADE"):
         monkeypatch.delenv(k, raising=False)
     assert (Settings(mode="demo").risk.max_open_trades, Settings(mode="demo").risk.max_total_open_risk) == (5, 0.20)
     assert (Settings(mode="live").risk.max_open_trades, Settings(mode="live").risk.max_total_open_risk) == (2, 0.10)
@@ -258,6 +258,8 @@ def test_open_trade_limits_demo_live_and_env(monkeypatch):
     monkeypatch.setenv("MAX_OPEN_RISK", "15")
     s = Settings(mode="live")
     assert (s.risk.max_open_trades, s.risk.max_total_open_risk) == (4, 0.15)
+    monkeypatch.setenv("RISK_PER_TRADE", "2")
+    assert Settings(mode="demo").risk.risk_per_trade == 0.02
 
 
 def test_correlated_trades_are_capped(tmp_path):
