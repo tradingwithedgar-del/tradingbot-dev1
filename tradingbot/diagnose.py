@@ -50,7 +50,7 @@ def report(j: Journal, s: Settings, now: pd.Timestamp | None = None, hours: int 
 
     halted = j.get(f"halted:{s.mode}")
     if halted:
-        out.append(f"!! HALTED: {halted}")
+        out += [f"!! {halted}" if halted.startswith("HALTED") else f"!! HALTED: {halted}", ""]
     if s.stop_file.exists():
         out.append("!! Paused: new trades are off (`tiim stop`). Run `tiim resume` to turn them back on.")
 
@@ -75,7 +75,27 @@ def report(j: Journal, s: Settings, now: pd.Timestamp | None = None, hours: int 
             f"  blocked / passed on (virtual): {len(blocked)}",
             f"  experiments & tweak tests:     {len(by_design)}  (always virtual - that's by design)"]
     for t in real:
-        out.append(f"  REAL #{t['id']} {t['symbol']} {t['side']} {t['strategy']} at {t['opened_at'][11:16]} UTC - {t['reason'][:70]}")
+        if t["status"] == "closed":
+            how = (t.get("decision") or {}).get("close_reason", "")
+            res = f"{t['r_multiple']:+.2f}R {t['pnl'] or 0:+,.0f}" + (f" ({how})" if how else "")
+        else:
+            res = "still open"
+        out.append(f"  REAL #{t['id']} {t['opened_at'][5:16].replace('T', ' ')} {t['symbol']} {t['side']} {t['strategy']} "
+                   f"risk {(t['risk_pct'] or 0):.1%} -> {res}")
+    closed = [t for t in real if t["status"] == "closed"]
+    if closed:
+        wins = sum(1 for t in closed if (t["r_multiple"] or 0) > 0.05)
+        out.append(f"  closed: {len(closed)}, won {wins}, total {sum(t['r_multiple'] or 0 for t in closed):+.1f}R, "
+                   f"{sum(t['pnl'] or 0 for t in closed):+,.0f} in account currency")
+        by = Counter()
+        for t in closed:
+            by[t["strategy"]] += t["r_multiple"] or 0
+        out.append("  R by strategy: " + ", ".join(f"{k} {v:+.1f}R" for k, v in by.most_common()))
+    curve = [e for e in j.equity_curve(s.mode) if e["ts"] >= since]
+    if curve:
+        lo = min(curve, key=lambda e: e["equity"])
+        out.append(f"  equity: {curve[0]['equity']:,.0f} -> {curve[-1]['equity']:,.0f} (lowest {lo['equity']:,.0f}, "
+                   f"peak so far {curve[-1]['peak']:,.0f})")
     if blocked:
         out += ["", "Why setups were passed on:"]
         for text, n in Counter(_why((t.get("decision") or {}).get("why", [])) for t in blocked).most_common():
