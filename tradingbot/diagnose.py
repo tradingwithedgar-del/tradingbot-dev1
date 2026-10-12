@@ -21,6 +21,7 @@ REASON_GROUPS = [
     ("stale quote", "price quote was stale"),
     ("stop too tight", "stop would have been too tight"),
     ("already in a real trade", "already had a trade on that symbol"),
+    ("too close to the", "too close to a market close (gap protection)"),
     ("max open trades", "already at the maximum number of open trades"),
     ("correlated", "already enough trades in that market group (e.g. several US indices the same way)"),
     ("open risk", "already at the maximum total risk"),

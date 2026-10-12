@@ -19,6 +19,7 @@ from .learning import Learner
 from .risk import RiskManager
 from .learning import CANDIDATE
 from .news.assets import asset_class
+from .sessions import entry_block, flatten_reason
 from .strategies import Signal, Strategy, load_library
 
 log = logging.getLogger(__name__)
@@ -54,6 +55,7 @@ class Agent:
         self.news_strats: list[Strategy] = [st for st in self.core if "news" in st.needs]
         self.learner.apply_params(self.core)
         self.last_fast: dict[str, str] = {}
+        self._tf = pd.Timedelta(seconds=TIMEFRAME_SECONDS[settings.timeframe])
         self.j.clock = self.now
         self.last_bar: dict[str, str] = journal.get(f"last_bar:{journal.mode}", {}) or {}
         if settings.experiments_allowed:
@@ -121,6 +123,7 @@ class Agent:
             except Exception:
                 log.exception("news refresh failed")
             self._flatten_for_news(now_ts)
+        self._flatten_for_session(now_ts)
         self._sync_closed_positions()
         equity, balance = self.broker.equity(), self.broker.balance()
         peak = self._peak(equity)
@@ -191,6 +194,21 @@ class Agent:
                 self.j.event("manage", f"#{t['id']} {t['symbol']} {reason}", ts=self.now())
             except Exception:
                 log.exception("could not close #%s before earnings", t["id"])
+
+    def _flatten_for_session(self, now: pd.Timestamp) -> None:
+        """Be flat before stock closes and weekend closes: stops don't protect across a gap."""
+        for t in self.j.open_trades(shadow=False):
+            reason = flatten_reason(t["symbol"], now)
+            dec = t.get("decision") or {}
+            if not reason or dec.get("closed_by_agent"):
+                continue
+            try:
+                self.broker.close_position(t["broker_id"])
+                dec["closed_by_agent"] = reason
+                self.j.update_trade(t["id"], decision=dec)
+                self.j.event("manage", f"#{t['id']} {t['symbol']} {reason}", {"trade_id": t["id"]}, ts=self.now())
+            except Exception:
+                log.exception("could not close #%s before the close", t["id"])
 
     def _fast_news_pass(self, now: pd.Timestamp) -> None:
         """While news is driving a symbol, check the news strategies on 5-minute bars between 15m closes."""
@@ -336,6 +354,8 @@ class Agent:
             return "target"
         if abs(exit_price - t["stop"]) <= tol:
             return "stop"
+        if (exit_price - t["stop"]) * (1 if t["side"] == "buy" else -1) < 0:
+            return "stop"   # filled beyond the stop: the market gapped over it
         if dec.get("breakeven_moved") and abs(exit_price - entry) <= tol:
             return "breakeven"
         return "manual"
@@ -407,7 +427,7 @@ class Agent:
                     exit_price = t["stop"]
                 elif lo <= t["take_profit"]:
                     exit_price = t["take_profit"]
-            if exit_price is None and self._time_up(t):
+            if exit_price is None and (self._time_up(t) or flatten_reason(t["symbol"], ctx.time + self._tf)):
                 exit_price = float(bar["close"])
             if exit_price is not None:
                 d = 1 if t["side"] == "buy" else -1
@@ -504,6 +524,9 @@ class Agent:
             return "STOP file present - no new real entries"
         if sig.symbol in real_symbols:
             return "already in a real trade on this symbol"
+        gap = entry_block(sig.symbol, pd.Timestamp(self.now()))
+        if gap:
+            return gap
         if self.news:
             strat = next((st for st in self.core if st.name == sig.strategy.split(CANDIDATE)[0]), None)
             reason = self.news.blackout(sig.symbol, pd.Timestamp(self.now()),

@@ -277,3 +277,23 @@ def test_correlated_trades_are_capped(tmp_path):
                    and asset_class(b["symbol"]) == asset_class(a["symbol"])
                    and b["opened_at"] <= a["opened_at"] < (b["closed_at"] or "9")]
         assert not overlap
+
+
+def test_gap_protection_sessions():
+    import pandas as pd
+
+    from tradingbot.agent import Agent
+    from tradingbot.sessions import entry_block, flatten_reason
+
+    utc = lambda s: pd.Timestamp(s, tz="UTC")
+    # Oct 2026 is EDT (UTC-4): stock close 16:00 ET = 20:00 UTC
+    assert flatten_reason("TSLA", utc("2026-10-08 19:50")) and not flatten_reason("TSLA", utc("2026-10-08 19:40"))
+    assert entry_block("TSLA", utc("2026-10-08 19:05")) and not entry_block("TSLA", utc("2026-10-08 18:55"))
+    assert not flatten_reason("US30", utc("2026-10-08 19:50"))              # indices trade overnight
+    assert flatten_reason("US30", utc("2026-10-09 20:10"))                  # ...but not over the weekend (Friday)
+    assert flatten_reason("XAUUSD", utc("2026-10-09 20:10")) and entry_block("XTIUSD", utc("2026-10-09 19:30"))
+    assert not flatten_reason("BTCUSD", utc("2026-10-09 20:10")) and not entry_block("BTCUSD", utc("2026-10-09 20:10"))
+    # a fill beyond the stop is a gapped stop, not a manual close
+    t = {"side": "sell", "stop": 100.0, "take_profit": 85.0, "decision": {}}
+    assert Agent._close_reason(t, 114.0, 95.0, estimated=False) == "stop"
+    assert Agent._close_reason(t, 97.0, 95.0, estimated=False) == "manual"
