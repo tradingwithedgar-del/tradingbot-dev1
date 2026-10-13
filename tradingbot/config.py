@@ -6,6 +6,7 @@ Values can be overridden with environment variables (see .env.example).
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,6 +16,13 @@ try:
     load_dotenv()
 except ImportError:  # pragma: no cover
     pass
+
+# A subscription token pasted with extra text around it (or pasted twice): keep just the token.
+_tok = os.getenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+if _tok and not re.fullmatch(r"sk-ant-oat\w*-[A-Za-z0-9_-]+", _tok):
+    _m = re.search(r"sk-ant-oat\w*-[A-Za-z0-9_-]+", _tok)
+    if _m:
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = _m.group(0)
 
 # A Claude subscription token (from `claude setup-token`, starts with sk-ant-oat) pasted into
 # ANTHROPIC_API_KEY by mistake: use it as the subscription token it is.
