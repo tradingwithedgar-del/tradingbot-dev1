@@ -227,9 +227,12 @@ def clean_idea(d: dict) -> Genome | None:
             name = c["name"]
             if name not in LAB_CONDITIONS or name in {x[0] for x in conds}:
                 continue
+            given = c.get("params") or {}
+            if isinstance(given, list):            # [{"name": "period", "value": 14}, ...]
+                given = {x.get("name"): x.get("value") for x in given if isinstance(x, dict)}
             p = {}
             for k, (lo, hi, is_int) in CONDITIONS[name].items():
-                v = float(c.get("params", {}).get(k, (lo + hi) / 2))
+                v = float(given.get(k, (lo + hi) / 2))
                 v = min(hi, max(lo, v))
                 p[k] = int(round(v)) if is_int else round(v, 2)
             conds.append((name, p))
@@ -250,7 +253,10 @@ IDEA_SCHEMA = {
             "conditions": {"type": "array", "items": {
                 "type": "object",
                 "properties": {"name": {"type": "string", "enum": LAB_CONDITIONS},
-                               "params": {"type": "object", "additionalProperties": {"type": "number"}}},
+                               "params": {"type": "array", "items": {
+                                   "type": "object",
+                                   "properties": {"name": {"type": "string"}, "value": {"type": "number"}},
+                                   "required": ["name", "value"], "additionalProperties": False}}},
                 "required": ["name", "params"], "additionalProperties": False}},
             "stop_atr": {"type": "number"}, "target_r": {"type": "number"}, "max_bars": {"type": "integer"},
             "why": {"type": "string"}},
@@ -269,7 +275,7 @@ def claude_ideas(llm, budget, n: int, near_misses: list[dict], cfg: LabConfig, m
         "after costs. Each rule is 2-4 conditions that must all be true on the same candle (written for a long; "
         "shorts are mirrored automatically), plus a stop distance in ATR (0.6-3), a target in R (0.3-3, R = stop "
         "distance) and an optional time stop in candles (0 = none, up to 48).\n"
-        f"Available conditions and parameter ranges: {json.dumps(menu)}\n"
+        f"Available conditions and parameter ranges (give params as a list of name/value pairs): {json.dumps(menu)}\n"
         f"Closest attempts so far (did not pass): {json.dumps(near_misses[:6])}\n"
         "Prefer ideas that differ from these attempts.")
     reply = llm.ask("You are a quantitative strategy researcher. Be concrete and stay inside the menu.",
@@ -339,7 +345,7 @@ def run_lab(data: dict[str, pd.DataFrame], cfg: LabConfig, existing: dict, seed:
     approved.sort(key=lambda a: (a["stats"]["unseen"]["win_rate"], a["stats"]["unseen"]["total_r"]), reverse=True)
     active_now = sum(1 for i in existing.values() if i.get("lab") and i.get("status") != "retired") - len(withdrawn)
     approved = approved[:max(0, cfg.max_active - active_now)]
-    best = sorted(tested, key=score, reverse=True)[:10]
+    best = sorted(tested, key=lambda r: (r["passed"],) + score(r), reverse=True)[:10]   # passes first
     return {
         "ran_at": pd.Timestamp.now(tz="UTC").isoformat(),
         "symbols": sorted(frames), "bars": {s: len(f.c) for s, f in frames.items()},
@@ -381,7 +387,7 @@ def summary(report: dict) -> str:
              f"Gate: win rate >= {g['min_win_rate']:.0%} on past and unseen data, {g['min_trades']}+ trades"
              + (", not losing money overall" if g["require_profit"] else ""),
              f"Passed: {report['passed']}, added to TIIM: {len(report['approved'])}, withdrawn: {len(report['withdrawn'])}",
-             "Closest / best:"]
+             "Passed first, then the closest misses:"]
     for r in report["best"][:6]:
         i, u = r["in_sample"], r["unseen"]
         lines.append(f"  {'PASS' if r['passed'] else 'fail'} {r['gid']} {i['win_rate']:.0%}/{u['win_rate']:.0%} win, "
