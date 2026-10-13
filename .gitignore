@@ -6,3 +6,4 @@ data/*.db-*
 data/STOP
 .pytest_cache/
 .venv/
+data/.claude-cli.lock
