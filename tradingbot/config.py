@@ -16,6 +16,13 @@ try:
 except ImportError:  # pragma: no cover
     pass
 
+# A Claude subscription token (from `claude setup-token`, starts with sk-ant-oat) pasted into
+# ANTHROPIC_API_KEY by mistake: use it as the subscription token it is.
+if os.getenv("ANTHROPIC_API_KEY", "").startswith("sk-ant-oat"):
+    if not os.getenv("CLAUDE_CODE_OAUTH_TOKEN"):
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = os.environ["ANTHROPIC_API_KEY"]
+    del os.environ["ANTHROPIC_API_KEY"]
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("BOT_DATA_DIR", ROOT / "data"))
 

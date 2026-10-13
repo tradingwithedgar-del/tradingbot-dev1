@@ -10,6 +10,7 @@
     python -m tiim why                 # what TIIM did in the last 24h and why it did/didn't trade
     python -m tiim desk                # the trading desk: latest brief, debates and report cards
     python -m tiim lab                 # run the Strategy Lab now (it also runs nightly)
+    python -m tiim claude              # check that TIIM can reach Claude
     python -m tiim status
     python -m tiim stop | resume
 """
@@ -259,6 +260,28 @@ def cmd_desk(args) -> None:
     print(summary(j.get("lab:report") or {}))
 
 
+def cmd_claude(args) -> None:
+    """Check TIIM's Claude access with one tiny call."""
+    import os
+
+    from .llm import make_llm
+    from .news.classify import find_claude_cli
+
+    Settings()
+    key, tok = os.getenv("ANTHROPIC_API_KEY", ""), os.getenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+    print(f"ANTHROPIC_API_KEY:        {'set' if key else 'empty'}")
+    print(f"CLAUDE_CODE_OAUTH_TOKEN:  {'set (' + tok[:12] + '...)' if tok else 'empty'}")
+    print(f"claude command:           {find_claude_cli() or 'NOT FOUND'}")
+    llm = make_llm()
+    if llm is None:
+        print("\nNo Claude access. Put your `claude setup-token` token in .env as CLAUDE_CODE_OAUTH_TOKEN=... (see DEPLOY.md)")
+        return
+    print(f"\nUsing: {llm.name}. Asking Claude a test question...")
+    r = llm.ask("Reply with JSON only.", "Say ok.", {"type": "object", "properties": {"ok": {"type": "boolean"}},
+                                                      "required": ["ok"], "additionalProperties": False}, "haiku")
+    print("Claude answered: access works." if r.data is not None else f"Claude call FAILED: {r.error}")
+
+
 def cmd_lab(args) -> None:
     from .broker.tradelocker_broker import TradeLockerBroker
     from .journal import Journal
@@ -330,6 +353,7 @@ def main() -> None:
     dk = sub.add_parser("desk", help="the trading desk: research brief, recent debates, report cards, Strategy Lab")
     dk.add_argument("--db", default=None)
     dk.set_defaults(fn=cmd_desk)
+    sub.add_parser("claude", help="check that TIIM can reach Claude (one tiny call)").set_defaults(fn=cmd_claude)
     sub.add_parser("lab", help="run the Strategy Lab now (it also runs nightly)").set_defaults(fn=cmd_lab)
     sub.add_parser("stop").set_defaults(fn=cmd_stop)
     sub.add_parser("resume").set_defaults(fn=cmd_resume)

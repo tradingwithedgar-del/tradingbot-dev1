@@ -297,3 +297,17 @@ def test_gap_protection_sessions():
     t = {"side": "sell", "stop": 100.0, "take_profit": 85.0, "decision": {}}
     assert Agent._close_reason(t, 114.0, 95.0, estimated=False) == "stop"
     assert Agent._close_reason(t, 97.0, 95.0, estimated=False) == "manual"
+
+
+def test_subscription_token_in_api_key_slot_is_moved(monkeypatch):
+    import importlib
+
+    import tradingbot.config as config
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-oat01-example")
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    importlib.reload(config)
+    import os
+    assert os.getenv("CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oat01-example" and not os.getenv("ANTHROPIC_API_KEY")
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    importlib.reload(config)
