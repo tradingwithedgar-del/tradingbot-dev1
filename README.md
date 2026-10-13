@@ -109,6 +109,9 @@ Every time a bar closes, for each symbol the agent:
   * `stop_too_tight` (stopped, then price hit the original target) → wider stop buffer
   * `immediately_wrong` (never got +0.3R) → stricter entry rules
   * `gave_back_profit` (was +1R, ended −1R) → move stop to break-even at +1.5R
+* **Trading desk.** Before a setup becomes a real trade, Claude agents research the fundamentals, argue the
+  bull and bear case, and TIIM's judge takes it, halves it or skips it. A nightly Strategy Lab backtests new
+  strategy ideas and adds those that win 70%+ of the time. See [DESK.md](DESK.md).
 * **Evolution (demo only).** It keeps a population of 8 experimental indicator strategies (RSI, EMA
   stacks, MACD turns, Bollinger touches, stochastic crosses, ADX, zones, structure, momentum candles).
   New ones start as shadow trades. Those reaching +0.3R/trade over 20 trades are promoted to real demo

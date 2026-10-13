@@ -8,6 +8,8 @@
     python -m tiim backtest --tradelocker --days 60
     python -m tiim dashboard           # http://localhost:8000
     python -m tiim why                 # what TIIM did in the last 24h and why it did/didn't trade
+    python -m tiim desk                # the trading desk: latest brief, debates and report cards
+    python -m tiim lab                 # run the Strategy Lab now (it also runs nightly)
     python -m tiim status
     python -m tiim stop | resume
 """
@@ -133,7 +135,19 @@ def cmd_run(args) -> None:
         news = NewsMonitor(s, journal)
         earnings = EarningsDesk(s, broker, journal, news)
         logging.info("News monitor on (headlines read by %s)", news.reader)
-    agent = Agent(s, broker, journal, news=news, earnings=earnings)
+    desk = None
+    if s.desk.enabled:
+        from .desk import Desk
+        from .llm import make_llm
+
+        llm = make_llm()
+        if llm is None:
+            logging.warning("Trading desk is off: no Claude access (set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)")
+        else:
+            desk = Desk(s, journal, llm, news=news)
+            logging.info("Trading desk on (%s): research=%s advocates=%s judge=%s, up to %d Claude calls a day",
+                         llm.name, s.desk.model_research, s.desk.model_advocate, s.desk.model_judge, s.desk.daily_calls)
+    agent = Agent(s, broker, journal, news=news, earnings=earnings, desk=desk)
     logging.info("Strategy library: %s", ", ".join(st.name for st in agent.core))
     banner = "LIVE ACCOUNT - REAL MONEY" if s.is_live else "demo account"
     logging.info("TIIM started on %s | symbols=%s tf=%s risk=%.1f%% target=%.0fR",
@@ -213,6 +227,53 @@ def cmd_why(args) -> None:
     print(report(Journal(args.db or s.db_path, mode=s.mode), s, hours=args.hours))
 
 
+def cmd_desk(args) -> None:
+    from .desk import scorecard, scorecard_text
+    from .journal import Journal
+    from .lab import summary
+    from .llm import Budget
+
+    s = Settings()
+    j = Journal(args.db or s.db_path, mode=s.mode)
+    b = j.get("desk:brief") or {}
+    print(f"Trading desk ({'on' if s.desk.enabled else 'off'}), Claude calls today: "
+          f"{Budget(j, s.desk.daily_calls).used}/{s.desk.daily_calls}")
+    if b:
+        print(f"\nResearch brief {b['at'][:16].replace('T', ' ')} UTC: {b.get('overview', '')}")
+        for sym, m in (b.get("markets") or {}).items():
+            print(f"  {sym:<8} {m['bias']:<7} {m['confidence']:>3}%  {m['drivers'][:90]}")
+    rows = [t for t in j.trades("mode = ?", (s.mode,), order="id DESC", limit=300) if (t.get("decision") or {}).get("desk")][:8]
+    if rows:
+        print("\nRecent debates:")
+    for t in rows:
+        d = t["decision"]["desk"]
+        res = f"{t['r_multiple']:+.2f}R" if t["status"] == "closed" else "open"
+        print(f"  #{t['id']} {t['opened_at'][5:16].replace('T', ' ')} {t['symbol']} {t['side']} {t['strategy']}: "
+              f"bull {d.get('bull', {}).get('conviction', '-')}/10 vs bear {d.get('bear', {}).get('conviction', '-')}/10 "
+              f"-> {d['action'].upper()} ({'virtual' if t['shadow'] else 'real'}, {res})")
+        if d.get("reason"):
+            print(f"      {d['reason'][:140]}")
+    print("\nReport cards:")
+    print("\n".join(scorecard_text(scorecard(j, s))))
+    print()
+    print(summary(j.get("lab:report") or {}))
+
+
+def cmd_lab(args) -> None:
+    from .broker.tradelocker_broker import TradeLockerBroker
+    from .journal import Journal
+    from .lab import run_nightly, summary
+    from .llm import make_llm
+
+    s = Settings()
+    s.validate()
+    j = Journal(s.db_path, mode=s.mode)
+    if not s.experiments_allowed:
+        raise SystemExit("The Strategy Lab only feeds the demo account.")
+    report = run_nightly(s, j, TradeLockerBroker(s), llm=make_llm() if s.lab.claude_ideas else None)
+    print(summary(report))
+
+
 def cmd_stop(args) -> None:
     s = Settings()
     s.stop_file.parent.mkdir(parents=True, exist_ok=True)
@@ -266,6 +327,10 @@ def main() -> None:
     w.add_argument("--hours", type=int, default=24)
     w.add_argument("--db", default=None)
     w.set_defaults(fn=cmd_why)
+    dk = sub.add_parser("desk", help="the trading desk: research brief, recent debates, report cards, Strategy Lab")
+    dk.add_argument("--db", default=None)
+    dk.set_defaults(fn=cmd_desk)
+    sub.add_parser("lab", help="run the Strategy Lab now (it also runs nightly)").set_defaults(fn=cmd_lab)
     sub.add_parser("stop").set_defaults(fn=cmd_stop)
     sub.add_parser("resume").set_defaults(fn=cmd_resume)
     args = p.parse_args()

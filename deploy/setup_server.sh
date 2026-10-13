@@ -83,9 +83,11 @@ install -m 644 "$APP/deploy/tiim.service" /etc/systemd/system/tiim.service
 install -m 644 "$APP/deploy/tiim-dashboard.service" /etc/systemd/system/tiim-dashboard.service
 install -m 644 "$APP/deploy/tiim-update.service" /etc/systemd/system/tiim-update.service
 install -m 644 "$APP/deploy/tiim-update.timer" /etc/systemd/system/tiim-update.timer
+install -m 644 "$APP/deploy/tiim-lab.service" /etc/systemd/system/tiim-lab.service
+install -m 644 "$APP/deploy/tiim-lab.timer" /etc/systemd/system/tiim-lab.timer
 chmod +x "$APP/deploy/update.sh"
 systemctl daemon-reload
-systemctl enable --now tiim.service tiim-dashboard.service tiim-update.timer
+systemctl enable --now tiim.service tiim-dashboard.service tiim-update.timer tiim-lab.timer
 
 echo "==> Firewall: only SSH (8000 for the password-protected dashboard)"
 ufw allow OpenSSH >/dev/null

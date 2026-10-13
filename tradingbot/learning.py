@@ -26,7 +26,7 @@ from .strategies import ExperimentalStrategy, Genome, Strategy, mutate, random_g
 
 CONDITION_KEYS = ["regime", "trend_strength", "volatility", "structure", "bias", "session", "rsi_zone",
                   "symbol", "with_structure", "zone_fresh", "divergence", "confluence",
-                  "news_state", "news_kind", "news_agree"]
+                  "news_state", "news_kind", "news_agree", "brief_agree"]
 
 
 
@@ -205,9 +205,37 @@ class Learner:
         info = self.population.get(strategy.split(CANDIDATE)[0])
         if info:
             g = Genome.from_json(info["genome"])
-            if g.scalp:
+            if g.target_r:
                 return g.target_r
         return self.rr
+
+    def merge_lab(self, lab: dict, now: str) -> list[str]:
+        """Take in what the nightly Strategy Lab approved or withdrew (it runs as its own process,
+        so it hands results over through the journal instead of editing the learner's state)."""
+        if self.live or not lab:
+            return []
+        seen = set(self.j.get("lab:merged") or [])
+        notes = []
+        for item in lab.get("approved", []):
+            gid = item["gid"]
+            if gid in seen or gid in self.population:
+                continue
+            self.population[gid] = {"genome": item["genome"], "status": "demo", "born": now, "lab": item.get("stats", {}),
+                                    "description": item.get("description", ""), "expectancy": 0.0}
+            notes.append(f"Strategy Lab added {gid}: {item.get('description', '')}")
+            seen.add(gid)
+        for gid in lab.get("withdrawn", []):
+            info = self.population.get(gid)
+            if info and info.get("lab") and info["status"] != "retired" and f"-{gid}" not in seen:
+                info["status"] = "retired"
+                notes.append(f"Strategy Lab withdrew {gid}: it no longer passes the backtest")
+                seen.add(f"-{gid}")
+        if notes:
+            self.j.set("lab:merged", sorted(seen))
+            for n in notes:
+                self.j.event("evolution", n)
+            self.save()
+        return notes
 
     def _refresh_filters(self, strategy: str) -> None:
         breakeven_p = 1.0 / (1.0 + self.rr_for(strategy))
@@ -360,7 +388,7 @@ class Learner:
                     self.j.event("approval_needed",
                                  f"{gid} is a LIVE CANDIDATE: {Genome.from_json(info['genome']).describe()} - add it to LIVE_APPROVED_STRATEGIES to allow it on live",
                                  info)
-        active = [g for g, i in self.population.items() if i["status"] != "retired"]
+        active = [g for g, i in self.population.items() if i["status"] != "retired" and not i.get("lab")]
         ranked = sorted(active, key=lambda g: self.population[g].get("expectancy", 0.0), reverse=True)
         attempts = 0
         while len(active) < self.cfg.population_size and attempts < 100:

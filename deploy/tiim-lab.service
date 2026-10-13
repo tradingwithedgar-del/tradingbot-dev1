@@ -1,0 +1,13 @@
+[Unit]
+Description=TIIM Strategy Lab (nightly backtests of new strategy ideas)
+
+[Service]
+Type=oneshot
+User=tiim
+WorkingDirectory=/opt/tiim
+Environment=PATH=/home/tiim/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+Nice=19
+IOSchedulingClass=idle
+ExecStart=/opt/tiim/.venv/bin/python -m tiim lab
+TimeoutStartSec=3h

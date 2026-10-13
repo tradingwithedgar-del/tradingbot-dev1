@@ -44,11 +44,14 @@ class RiskManager:
             return f"total open risk {open_risk_pct:.1%} at cap"
         return None
 
-    def size(self, equity: float, peak: float, entry: float, stop: float, spec: InstrumentSpec, open_risk_pct: float) -> SizeDecision:
+    def size(self, equity: float, peak: float, entry: float, stop: float, spec: InstrumentSpec, open_risk_pct: float,
+             scale: float = 1.0) -> SizeDecision:
+        """`scale` lets the desk's judge halve a trade. It is clamped to (0, 1]: nobody can raise the risk."""
         dist = abs(entry - stop)
         if dist <= 0 or equity <= 0:
             return SizeDecision(False, reason="invalid stop distance or equity")
-        risk_pct = min(self.current_risk_pct(equity, peak), self.cfg.max_total_open_risk - open_risk_pct)
+        scale = min(1.0, max(0.0, scale))
+        risk_pct = min(self.current_risk_pct(equity, peak) * scale, self.cfg.max_total_open_risk - open_risk_pct)
         if risk_pct <= 0:
             return SizeDecision(False, reason="no risk budget left")
         risk_amount = equity * risk_pct

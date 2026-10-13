@@ -108,6 +108,44 @@ class NewsConfig:
     feeds: list[str] = field(default_factory=lambda: [f for f in os.getenv("NEWS_FEEDS", "").split(",") if f.strip()])
 
 
+def _env_int(name: str, default: int) -> int:
+    return int(os.getenv(name) or default)
+
+
+@dataclass
+class DeskConfig:
+    """The trading desk: Claude agents that research, argue and judge each setup (see DESK.md)."""
+    enabled: bool = field(default_factory=lambda: os.getenv("DESK_ENABLED", "1") not in {"0", "false", "no", "NO"})
+    # Claude Code model aliases (opus / sonnet / haiku) or full model ids when an API key is used.
+    model_research: str = field(default_factory=lambda: os.getenv("DESK_MODEL_RESEARCH", "sonnet"))
+    model_advocate: str = field(default_factory=lambda: os.getenv("DESK_MODEL_ADVOCATE", "sonnet"))
+    model_judge: str = field(default_factory=lambda: os.getenv("DESK_MODEL_JUDGE", "opus"))
+    # Claude Pro has usage limits: the desk never makes more than this many calls a day.
+    daily_calls: int = field(default_factory=lambda: _env_int("DESK_DAILY_CALLS", 60))
+    rebuttal: bool = field(default_factory=lambda: os.getenv("DESK_REBUTTAL", "1") not in {"0", "false", "no", "NO"})
+    research_every_minutes: int = field(default_factory=lambda: _env_int("DESK_RESEARCH_MINUTES", 120))
+    max_price_drift_atr: float = 0.3     # setup is dropped if price ran away while the desk debated
+    # Scorekeeper: an agent whose advice doesn't beat plain TIIM loses its say.
+    veto_review_after: int = 20           # vetoes needed before the judge's veto record is judged
+    veto_max_avg_r: float = 0.15          # vetoed setups averaging better than this = vetoes are costing money
+
+
+@dataclass
+class LabConfig:
+    """Strategy Lab: invents strategies and backtests them on real history every night."""
+    min_win_rate: float = field(default_factory=lambda: float(os.getenv("LAB_MIN_WIN_RATE") or 70) / 100)
+    min_trades: int = field(default_factory=lambda: _env_int("LAB_MIN_TRADES", 100))
+    # Safety floor on top of the win rate: a strategy that wins often but still loses money overall
+    # (tiny wins, big losses) is rejected. LAB_REQUIRE_PROFIT=0 turns this off.
+    require_profit: bool = field(default_factory=lambda: os.getenv("LAB_REQUIRE_PROFIT", "1") not in {"0", "false", "no", "NO"})
+    history_bars: int = field(default_factory=lambda: _env_int("LAB_HISTORY_BARS", 12000))   # ~6 months of 15m
+    out_of_sample: float = 0.3            # last 30% of history is never used to pick, only to confirm
+    candidates_per_night: int = field(default_factory=lambda: _env_int("LAB_CANDIDATES", 150))
+    claude_ideas: int = field(default_factory=lambda: _env_int("LAB_CLAUDE_IDEAS", 6))
+    spread_atr: float = 0.05              # trading cost charged on every backtest trade, in ATR
+    max_active: int = 6                   # lab strategies trading at once (best first)
+
+
 @dataclass
 class Settings:
     mode: str = field(default_factory=lambda: os.getenv("BOT_MODE", "demo").lower())
@@ -122,6 +160,8 @@ class Settings:
     compliance: ComplianceConfig = field(default_factory=ComplianceConfig)
     learning: LearningConfig = field(default_factory=LearningConfig)
     news: NewsConfig = field(default_factory=NewsConfig)
+    desk: DeskConfig = field(default_factory=DeskConfig)
+    lab: LabConfig = field(default_factory=LabConfig)
     # Strategies the human has explicitly approved for the live account.
     live_approved_strategies: list[str] = field(
         default_factory=lambda: [s.strip() for s in os.getenv("LIVE_APPROVED_STRATEGIES", "sd_reversal,divergence,structure_trend").split(",") if s.strip()]

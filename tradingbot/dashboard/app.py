@@ -292,6 +292,23 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         heads = [n for n in j.news(limit * 3, kind="headline") if (n["impact"] or 0) >= 2][:limit]
         return {"upcoming": upcoming[:40], "headlines": heads}
 
+    @app.get("/api/desk")
+    def desk(mode: str):
+        from ..config import Settings
+        from ..desk import scorecard
+        from ..llm import Budget
+
+        st = Settings()
+        st.mode = mode
+        rows = [t for t in j.trades("mode = ?", (mode,), order="id DESC", limit=300)
+                if (t.get("decision") or {}).get("desk")][:15]
+        debates = [{"id": t["id"], "symbol": t["symbol"], "side": t["side"], "strategy": t["strategy"],
+                    "opened_at": t["opened_at"], "shadow": t["shadow"], "status": t["status"],
+                    "r_multiple": t["r_multiple"], "desk": t["decision"]["desk"]} for t in rows]
+        return {"enabled": st.desk.enabled, "calls_today": Budget(j, st.desk.daily_calls).used,
+                "daily_calls": st.desk.daily_calls, "brief": j.get("desk:brief") or {},
+                "scorecard": scorecard(j, st), "debates": debates, "lab": j.get("lab:report") or {}}
+
     @app.get("/api/events")
     def events(mode: str, limit: int = 200):
         return j.events(limit, mode)

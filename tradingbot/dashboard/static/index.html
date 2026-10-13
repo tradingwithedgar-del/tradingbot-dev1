@@ -67,6 +67,11 @@ tr.click:hover { background: var(--grid); }
 .tag { display: inline-block; padding: 1px 7px; margin: 1px 2px; border-radius: 4px; background: var(--grid); color: var(--ink-2); font-size: 12px; }
 .events { list-style: none; padding: 0; margin: 0; max-height: 380px; overflow-y: auto; }
 .events li { padding: 6px 0; border-bottom: 1px solid var(--grid); }
+.desk-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 18px; }
+@media (max-width: 760px) { .desk-grid { grid-template-columns: minmax(0, 1fr); } }
+h3.mini { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-2); margin: 10px 0 4px; }
+.verdict { font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--ring); margin-right: 6px; }
+.verdict.skip { color: var(--critical); } .verdict.take { color: var(--good-text); }
 .events .kind { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); margin-right: 6px; }
 .events .ts { color: var(--muted); font-size: 12px; margin-right: 6px; font-variant-numeric: tabular-nums; }
 #detail { display: none; }
@@ -128,6 +133,15 @@ tr.click:hover { background: var(--grid); }
       <div class="tv-wrap" id="tvChart"></div>
       <p class="sub" style="margin-top:8px" id="tvNote"></p>
     </div>
+  </section>
+
+  <section class="card" id="deskCard">
+    <div class="controls" style="justify-content:space-between"><div><h2>Trading desk</h2><p class="sub" id="deskSub">Research brief, the bull/bear debate on each setup, the judge's call, and how each agent is scoring</p></div></div>
+    <div class="desk-grid">
+      <div><h3 class="mini">Research brief</h3><p class="muted" id="deskOverview"></p><div class="table-wrap" style="max-height:300px"><table id="briefTable"></table></div></div>
+      <div><h3 class="mini">Report cards</h3><ul class="events" id="deskCards"></ul><h3 class="mini">Strategy Lab</h3><ul class="events" id="labList"></ul></div>
+    </div>
+    <h3 class="mini">Recent debates</h3><ul class="events" id="debates" style="max-height:420px"></ul>
   </section>
 
   <section class="card half"><h2>Upcoming news events</h2><p class="sub">High-impact releases and earnings the agent is watching. No new trades from 15 min before to 5 min after</p><div class="table-wrap" style="max-height:340px"><table id="eventsTable"></table></div></section>
@@ -241,6 +255,39 @@ async function refresh() {
   await refreshSymbols();
   if (CHART_TAB === 'tiim') refreshView(); else loadTradingView(false);
   get('/api/news').then(renderNews).catch(() => {});
+  get(`/api/desk?mode=${m}`).then(renderDesk).catch(() => {});
+}
+
+function renderDesk(dk) {
+  const fmtT = (ts) => (ts || '').slice(5, 16).replace('T', ' ');
+  $('deskSub').textContent = dk.enabled
+    ? `Claude calls today: ${dk.calls_today} of ${dk.daily_calls}. When the allowance is used up, TIIM decides alone.`
+    : 'The desk is turned off (DESK_ENABLED=0). TIIM decides alone.';
+  const b = dk.brief || {};
+  $('deskOverview').textContent = b.at ? `${fmtT(b.at)} UTC: ${b.overview || ''}` : 'No research brief yet. The first one arrives within a few minutes of TIIM starting with Claude access.';
+  $('briefTable').innerHTML = Object.keys(b.markets || {}).length
+    ? `<thead><tr><th>Market</th><th>Bias</th><th>Conf.</th><th>Drivers / risks</th></tr></thead><tbody>` +
+      Object.entries(b.markets).map(([sym, mk]) => `<tr><td>${esc(sym)}</td><td>${esc(mk.bias)}</td><td>${mk.confidence}%</td>
+        <td style="white-space:normal">${esc(mk.drivers)}<div class="muted">${esc(mk.risks)}</div></td></tr>`).join('') + '</tbody>'
+    : '';
+  const c = dk.scorecard || {}, jd = c.judge || {}, db = c.debate || {}, rs = c.research || {};
+  $('deskCards').innerHTML = [
+    `<li><span class="kind">judge</span>${esc(jd.text || 'no graded decisions yet.')}${jd.veto_power === false ? ' <b>Veto power suspended: its vetoes were costing money.</b>' : ''}</li>`,
+    db.graded ? `<li><span class="kind">debate</span>The side arguing harder was right ${db.stronger_side_right} of ${db.graded} times.</li>` : '',
+    (rs.with || rs.against) ? `<li><span class="kind">research</span>Trades with the brief won ${fmtPct(rs.with_win_rate, 0)} (${rs.with}), against it ${fmtPct(rs.against_win_rate, 0)} (${rs.against}).</li>` : '',
+  ].join('');
+  const lab = dk.lab || {};
+  $('labList').innerHTML = lab.ran_at
+    ? `<li><span class="kind">${esc(fmtT(lab.ran_at))}</span>Tested ${lab.tested} ideas (${lab.claude_ideas} from Claude): ${lab.passed} passed the ${fmtPct(lab.gate.min_win_rate, 0)} win-rate gate, ${lab.approved.length} added, ${lab.withdrawn.length} withdrawn.</li>` +
+      (lab.best || []).slice(0, 4).map(r => `<li><span class="kind">${r.passed ? 'pass' : 'fail'}</span>${fmtPct(r.in_sample.win_rate, 0)} / ${fmtPct(r.unseen.win_rate, 0)} win on past / unseen data, ${r.in_sample.trades + r.unseen.trades} trades. ${esc(r.why)}<div class="muted">${esc(r.description)}</div></li>`).join('')
+    : '<li class="muted">The Strategy Lab runs every night at about 04:20 UTC.</li>';
+  $('debates').innerHTML = (dk.debates || []).map(t => {
+    const d = t.desk, res = t.status === 'closed' ? fmtR(t.r_multiple) : 'open';
+    return `<li style="cursor:pointer" onclick="showTrade(${t.id})"><span class="ts">${esc(fmtT(t.opened_at))}</span>
+      <span class="verdict ${esc(d.action)}">${esc(d.action === 'none' ? 'no desk' : d.action)}</span>
+      #${t.id} ${esc(t.symbol)} ${esc(t.side)} · ${esc(t.strategy)} · ${t.shadow ? 'virtual' : 'real'} · ${res}
+      <div class="muted">Bull ${d.bull?.conviction ?? '–'}/10 vs bear ${d.bear?.conviction ?? '–'}/10. ${esc(d.reason || '')}</div></li>`;
+  }).join('') || '<li class="muted">No debates yet. The desk weighs in when a setup would become a real trade.</li>';
 }
 
 let CHART_TAB = 'tiim', TV_MAP = null, TV_LOADED = '';
@@ -514,11 +561,15 @@ async function showTrade(id) {
       `<p>RSI ${f.rsi ?? '—'} (${esc(f.rsi_zone || '')})</p>`),
     box('News', news),
     box('Risk plan', `<p>Entry <b>${px(t.entry)}</b> · stop <b>${px(t.stop)}</b> · target <b>${px(t.take_profit)}</b></p>` +
-      `<p>Wrong if price reaches ${px(t.stop)} (${px(risk)} away). Target is 3× that distance.</p>` +
+      `<p>Wrong if price reaches ${px(t.stop)} (${px(risk)} away). Target is ${risk ? (Math.abs(t.take_profit - t.entry) / risk).toFixed(1) : '—'}× that distance.</p>` +
       `<p>${t.shadow ? 'Virtual trade: no money at risk.' : `Risked ${fmtPct(t.risk_pct, 2)} of the account (${fmtNum(t.risk_amount)}).`}</p>`),
     box("TIIM's odds", `<p>Estimated win chance <b>${d.p != null ? fmtPct(d.p, 0) : '—'}</b>, expected result <b>${fmtR(d.expected_r)}</b> per trade, ` +
       `based on its record for ${esc((d.stat_key || t.strategy).replace('|', ' in '))}.</p>` +
       `<p class="muted">${(d.why || []).map(esc).join(' · ')}</p>`),
+    d.desk ? box('The desk', `<p><span class="verdict ${esc(d.desk.action)}">${esc(d.desk.action === 'none' ? 'no desk' : d.desk.action)}</span>${esc(d.desk.reason || '')}</p>` +
+      (d.desk.bull?.case ? `<p><b>Bull ${d.desk.bull.conviction}/10:</b> ${esc(d.desk.bull.case)}${d.desk.bull.rebuttal ? ` <span class="muted">Rebuttal: ${esc(d.desk.bull.rebuttal)}</span>` : ''}</p>` : '') +
+      (d.desk.bear?.case ? `<p><b>Bear ${d.desk.bear.conviction}/10:</b> ${esc(d.desk.bear.case)}${d.desk.bear.rebuttal ? ` <span class="muted">Rebuttal: ${esc(d.desk.bear.rebuttal)}</span>` : ''}</p>` : '') +
+      (d.desk.brief?.bias ? `<p class="muted">Research brief: ${esc(d.desk.brief.bias)} (${d.desk.brief.confidence}%). ${esc(d.desk.brief.drivers || '')}</p>` : '')) : '',
     box(t.status === 'open' ? 'So far' : 'Outcome', `<p>${t.status === 'open' ? 'Open' : `Closed ${fmtR(t.r_multiple)}${t.pnl ? ` (${fmtNum(t.pnl)})` : ''}`}` +
       ` · best ${fmtR(t.mfe_r)} · worst ${fmtR(-(t.mae_r || 0))}</p>` +
       ((pm.notes || []).map(x => `<p class="muted">• ${esc(x)}</p>`).join('') || '')),

@@ -20,6 +20,23 @@ ensure_swap() {
   fi
 }
 ensure_swap
+sync_units() {
+  # Install service files added by later versions (e.g. the nightly Strategy Lab). Runs every time,
+  # so units arriving with an update are installed on the next check.
+  local changed=0
+  for unit in tiim-lab.service tiim-lab.timer; do
+    if [ -f "$APP/deploy/$unit" ] && ! cmp -s "$APP/deploy/$unit" "/etc/systemd/system/$unit"; then
+      install -m 644 "$APP/deploy/$unit" "/etc/systemd/system/$unit"
+      changed=1
+    fi
+  done
+  if [ "$changed" = 1 ]; then
+    systemctl daemon-reload
+    systemctl enable --now tiim-lab.timer
+    echo "installed the Strategy Lab nightly timer"
+  fi
+}
+sync_units
 
 as_tiim git fetch --quiet origin || exit 0
 BRANCH=$(as_tiim git rev-parse --abbrev-ref HEAD)

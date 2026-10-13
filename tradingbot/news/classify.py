@@ -267,7 +267,9 @@ class ClaudeCodeClassifier:
         if self.model:
             cmd += ["--model", self.model]
         try:
-            with tempfile.TemporaryDirectory() as empty:   # no project files for Claude Code to pick up
+            from ..llm import CLI_LOCK
+
+            with CLI_LOCK, tempfile.TemporaryDirectory() as empty:   # one claude process at a time; no project files
                 env = dict(os.environ, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", DISABLE_AUTOUPDATER="1")
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout, cwd=empty, env=env)
             envelope = json.loads(proc.stdout or "{}")

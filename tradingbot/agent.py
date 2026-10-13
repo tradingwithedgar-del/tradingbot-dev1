@@ -41,7 +41,7 @@ def _bar_row(ts: pd.Timestamp, bar: pd.Series) -> list:
 
 class Agent:
     def __init__(self, settings: Settings, broker: Broker, journal: Journal, rng: random.Random | None = None,
-                 news=None, earnings=None) -> None:
+                 news=None, earnings=None, desk=None) -> None:
         self.s = settings
         self.broker = broker
         self.j = journal
@@ -50,6 +50,9 @@ class Agent:
         self.learner = Learner(journal, settings.learning, settings.risk, live=settings.is_live, rng=rng)
         self.news = news                      # NewsMonitor, or None (backtests)
         self.earnings = earnings              # EarningsDesk, or None
+        self.desk = desk                      # trading desk (Claude agents), or None
+        self._snap: dict[str, dict] = {}      # per-market snapshot for the Research Analyst
+        self._lab_seen = ""
         # The strategy library: built-ins plus anything in my_strategies/ (minus disabled ones).
         self.core: list[Strategy] = load_library(settings.db_path.parent, journal=journal)
         self.news_strats: list[Strategy] = [st for st in self.core if "news" in st.needs]
@@ -125,6 +128,9 @@ class Agent:
             self._flatten_for_news(now_ts)
         self._flatten_for_session(now_ts)
         self._sync_closed_positions()
+        self._merge_lab()
+        if self.desk:
+            self._desk_results()
         equity, balance = self.broker.equity(), self.broker.balance()
         peak = self._peak(equity)
         self.j.record_equity(balance, equity, peak, ts=self.now())
@@ -154,6 +160,10 @@ class Agent:
                 quote, spread = None, 0.0
             ctx = MarketContext(symbol, df, spread=spread, news=self._news_state(symbol, now_ts),
                                 earnings=self._earnings_state(symbol, now_ts))
+            c = df["close"]
+            self._snap[symbol] = {"price": float(c.iloc[-1]), "trend": ctx.trend,
+                                  "chg_1d": float(c.iloc[-1] / c.iloc[-min(len(c), 96)] * 100 - 100),
+                                  "chg_5d": float(c.iloc[-1] / c.iloc[0] * 100 - 100)}
             if live_clock:
                 try:
                     self.j.set(f"view:{self.j.mode}:{symbol}", chart_view(ctx))
@@ -165,6 +175,8 @@ class Agent:
             if quote is not None:
                 self._look_for_trades(ctx, quote)
         self.j.set(f"last_bar:{self.j.mode}", self.last_bar)
+        if self.desk:
+            self.desk.research_tick(now_ts, self._snap)
         if self.news and live_clock:
             self._fast_news_pass(now_ts)
 
@@ -486,6 +498,10 @@ class Agent:
             sig.features["symbol"] = ctx.symbol
             nd = int((ctx.news or {}).get("news_dir", 0) or 0)
             sig.features["news_agree"] = "none" if not nd else ("with" if (nd > 0) == (sig.side == "buy") else "against")
+            brief = self.desk.brief_for(ctx.symbol) if self.desk else None
+            bias = (brief or {}).get("bias", "neutral")
+            sig.features["brief_agree"] = "none" if bias == "neutral" else (
+                "with" if (bias == "bull") == (sig.side == "buy") else "against")
         # Strongest confluence first, so the best setup gets the real-money slot.
         signals.sort(key=lambda s: (-s.features["confluence"], s.experimental))
 
@@ -502,11 +518,18 @@ class Agent:
                 continue
             if action == "trade":
                 block = self._entry_blocker(sig, ctx, quote, open_real, real_symbols)
+                if not block and self.desk and self.desk.busy_with(sig.symbol):
+                    block = "the desk is already debating another setup on this market"
                 if block:
                     action = "shadow"
                     why.append(block)
             dec = {"action": action, "p": round(decision.p, 3), "expected_r": round(decision.expected_r, 3),
                    "stat_key": decision.stat_key, "why": why}
+            if action == "trade" and self.desk:
+                if self.desk.submit(sig, ctx, dec):
+                    real_symbols.add(sig.symbol)     # one debate per market at a time
+                    continue                          # the verdict comes back on a later cycle
+                why.append("desk unavailable (no Claude or daily budget used) - TIIM decided alone")
             if action == "trade":
                 if self._open_real(sig, ctx, dec, open_real):
                     real_symbols.add(sig.symbol)
@@ -550,7 +573,67 @@ class Agent:
         return self.compliance.check(sig.side, sig.symbol, sig.entry, sig.stop, ctx.close, ctx.atr_now, quote,
                                      self.broker.open_positions(), now)
 
-    def _open_real(self, sig: Signal, ctx: MarketContext, dec: dict, open_real: list[dict]) -> bool:
+    def _desk_results(self) -> None:
+        """Act on the desk's verdicts. The judge can take, halve or skip; the Risk Officer checks run again
+        because time passed while the desk debated."""
+        for p, v in self.desk.poll():
+            sig, ctx, dec = p.sig, p.ctx, p.dec
+            dec["desk"] = v.to_dict()
+            why = dec["why"]
+            action, scale = "trade", 1.0
+            if v.action == "skip":
+                if self.desk.veto_allowed():
+                    action = "shadow"
+                    why.append(f"desk veto: {v.reason}")
+                else:
+                    why.append(f"desk wanted to skip ({v.reason}) but its vetoes have been costing money - "
+                               "veto power suspended, TIIM took it")
+            elif v.action == "half":
+                scale = 0.5
+                why.append(f"desk: half size - {v.reason}")
+            elif v.action == "take":
+                why.append(f"desk: take - {v.reason}")
+            else:
+                why.append(v.reason)
+            if action == "trade":
+                open_real = self.j.open_trades(shadow=False)
+                try:
+                    quote = self.broker.get_quote(sig.symbol)
+                except Exception:  # pragma: no cover - network
+                    quote = None
+                mid = (quote.bid + quote.ask) / 2 if quote is not None else sig.entry
+                drift = abs(mid - sig.entry) / (ctx.atr_now or 1e-12)
+                block = None
+                if quote is None:
+                    block = "no price quote after the debate"
+                elif drift > self.s.desk.max_price_drift_atr:
+                    block = f"price moved {drift:.2f} ATR while the desk debated - setup no longer valid"
+                else:
+                    block = self._entry_blocker(sig, ctx, quote, open_real, {t["symbol"] for t in open_real})
+                if block:
+                    action = "shadow"
+                    why.append(block)
+                elif self._open_real(sig, ctx, dec, open_real, scale=scale):
+                    continue
+                else:
+                    action = "shadow"
+            dec["action"] = action
+            open_shadow = {(t["strategy"], t["symbol"]) for t in self.j.open_trades(shadow=True)}
+            if (sig.strategy, sig.symbol) not in open_shadow:
+                self._open_shadow(sig, ctx, dec)
+            self.j.event("desk", f"{sig.symbol} {sig.side} {sig.strategy}: desk said {v.action}"
+                                 + (f" - {v.reason}" if v.reason else "") + f" -> {'virtual' if action == 'shadow' else 'real'}",
+                         ts=self.now())
+
+    def _merge_lab(self) -> None:
+        if not self.s.experiments_allowed:
+            return
+        rep = self.j.get("lab:report")
+        if rep and rep.get("ran_at") != self._lab_seen:
+            self._lab_seen = rep.get("ran_at")
+            self.learner.merge_lab(rep, self.now())
+
+    def _open_real(self, sig: Signal, ctx: MarketContext, dec: dict, open_real: list[dict], scale: float = 1.0) -> bool:
         equity = self.broker.equity()
         peak = self._peak(equity)
         open_risk = sum(t["risk_pct"] or 0 for t in open_real)
@@ -559,7 +642,7 @@ class Agent:
         except Exception as e:  # pragma: no cover - network
             dec["why"].append(f"instrument spec failed: {e}")
             return False
-        size = self.risk.size(equity, peak, sig.entry, sig.stop, spec, open_risk)
+        size = self.risk.size(equity, peak, sig.entry, sig.stop, spec, open_risk, scale=scale)
         if not size.ok:
             dec["why"].append(size.reason)
             return False

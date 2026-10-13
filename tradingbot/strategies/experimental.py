@@ -83,9 +83,9 @@ class Genome:
     stop_atr: float = 1.5
     generation: int = 0
     parent: str = ""
-    style: str = "swing"        # "swing" | "scalp"
-    target_r: float = 0.0       # scalp only: target in R (swing uses the account's reward multiple)
-    max_bars: int = 0           # scalp only: close after this many candles if neither stop nor target hit
+    style: str = "swing"        # "swing" | "scalp" | "lab" (found and backtested by the Strategy Lab)
+    target_r: float = 0.0       # own target in R; 0 = the account's reward multiple (3R)
+    max_bars: int = 0           # close after this many candles if neither stop nor target hit; 0 = no time stop
 
     def to_json(self) -> str:
         return json.dumps({"conditions": self.conditions, "stop_mode": self.stop_mode, "stop_atr": self.stop_atr,
@@ -105,7 +105,7 @@ class Genome:
     @property
     def gid(self) -> str:
         body = {"c": self.conditions, "m": self.stop_mode, "s": round(self.stop_atr, 2)}
-        if self.scalp:   # swing genomes keep the ids they had before scalps existed
+        if self.target_r or self.max_bars:   # plain swing genomes keep the ids they had before
             body.update(t=round(self.target_r, 2), b=self.max_bars)
         return "exp_" + hashlib.sha1(json.dumps(body, sort_keys=True).encode()).hexdigest()[:8]
 
@@ -113,7 +113,13 @@ class Genome:
         parts = [f"{n}({', '.join(f'{k}={v}' for k, v in p.items())})" if p else n for n, p in self.conditions]
         text = " AND ".join(parts) + f" | stop={self.stop_mode}:{self.stop_atr:.2f}ATR"
         if self.scalp:
-            text = "SCALP " + text + f" | target {self.target_r:.1f}R | out after {self.max_bars} candles"
+            text = "SCALP " + text
+        if self.target_r:
+            text += f" | target {self.target_r:.1f}R"
+        if self.max_bars:
+            text += f" | out after {self.max_bars} candles"
+        if self.style == "lab":
+            text = "LAB " + text
         return text
 
 
@@ -194,7 +200,8 @@ class ExperimentalStrategy(Strategy):
                     dist = self.genome.stop_atr * a
                 stop = ctx.close - dist if side == "buy" else ctx.close + dist
                 sig = self._signal(ctx, side, stop, self.genome.describe())
-                if sig is not None and self.genome.scalp:
-                    sig.reward_multiple, sig.max_bars = self.genome.target_r, self.genome.max_bars
+                if sig is not None:
+                    sig.reward_multiple = self.genome.target_r or None
+                    sig.max_bars = self.genome.max_bars or None
                 return sig
         return None

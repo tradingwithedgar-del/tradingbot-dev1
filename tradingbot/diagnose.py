@@ -11,6 +11,9 @@ from .learning import CANDIDATE
 
 # How a shadow decision's last reason maps to a human explanation.
 REASON_GROUPS = [
+    ("desk veto", "the trading desk vetoed it (still followed virtually to grade the veto)"),
+    ("while the desk debated", "price moved while the desk debated"),
+    ("desk is already debating", "the desk was busy with another setup on that market"),
     ("not positive", "TIIM's estimate for this setup was not profitable enough (still learning; it explores on demo)"),
     ("learned filter", "TIIM learned this setup loses in these conditions"),
     ("major news points the other way", "major news pointed against the trade"),
@@ -110,7 +113,19 @@ def report(j: Journal, s: Settings, now: pd.Timestamp | None = None, hours: int 
     if errors:
         out += ["", f"Errors: {len(errors)} (latest first)"]
         out += [f"  {e['ts'][5:16].replace('T', ' ')} {e['message'][:110]}" for e in errors[:5]]
-    lessons = [e for e in j.events(500, s.mode) if e["kind"] in ("lesson", "tuning", "news", "manage") and e["ts"] >= since]
+    desk_rows = [t for t in rows if (t.get("decision") or {}).get("desk")]
+    if desk_rows or j.get("desk:brief") or j.get("lab:report"):
+        from .desk import scorecard, scorecard_text
+        from .lab import summary
+
+        acts = Counter(t["decision"]["desk"]["action"] for t in desk_rows)
+        out += ["", f"Trading desk: debated {len(desk_rows)} setups - take {acts.get('take', 0)}, half {acts.get('half', 0)}, "
+                    f"skip {acts.get('skip', 0)}, unavailable {acts.get('none', 0)}  (details: `tiim desk`)"]
+        out += scorecard_text(scorecard(j, s))
+        lab = j.get("lab:report")
+        if lab:
+            out.append("  " + summary(lab).splitlines()[2])
+    lessons = [e for e in j.events(500, s.mode) if e["kind"] in ("lesson", "tuning", "news", "manage", "evolution", "lab") and e["ts"] >= since]
     if lessons:
         out += ["", "Notable:"] + [f"  {e['ts'][5:16].replace('T', ' ')} [{e['kind']}] {e['message'][:100]}" for e in lessons[:8]]
     return "\n".join(out)
