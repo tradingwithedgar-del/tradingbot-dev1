@@ -53,6 +53,7 @@ class Agent:
         self.desk = desk                      # trading desk (Claude agents), or None
         self._snap: dict[str, dict] = {}      # per-market snapshot for the Research Analyst
         self._lab_seen = ""
+        self._started = pd.Timestamp.now(tz="UTC")
         # The strategy library: built-ins plus anything in my_strategies/ (minus disabled ones).
         self.core: list[Strategy] = load_library(settings.db_path.parent, journal=journal)
         self.news_strats: list[Strategy] = [st for st in self.core if "news" in st.needs]
@@ -175,7 +176,9 @@ class Agent:
             if quote is not None:
                 self._look_for_trades(ctx, quote)
         self.j.set(f"last_bar:{self.j.mode}", self.last_bar)
-        if self.desk:
+        # The first brief waits until every market has been seen (or 30 min), so none is left out.
+        if self.desk and (len(self._snap) >= len(self.s.symbols)
+                          or pd.Timestamp.now(tz="UTC") - self._started > pd.Timedelta(minutes=30)):
             self.desk.research_tick(now_ts, self._snap)
         if self.news and live_clock:
             self._fast_news_pass(now_ts)
