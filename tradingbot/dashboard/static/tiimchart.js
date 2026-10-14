@@ -110,8 +110,8 @@
       for (const z of view.zones || []) {
         const c = z.kind === 'demand' ? C.demand : C.supply;
         boxes.push({ t0: snap(ts(z.from)), t1: null, top: z.top, bottom: z.bottom,
-          fill: alpha(c, z.fresh ? 0.22 : 0.10), stroke: alpha(c, 0.6), text: C.ink2,
-          label: `${z.kind}${z.fresh ? ' (fresh)' : ` (${z.touches}x tested)`}` });
+          fill: alpha(c, z.tf ? 0.07 : (z.fresh ? 0.22 : 0.10)), stroke: alpha(c, z.tf ? 0.9 : 0.6), text: C.ink2,
+          label: z.tf ? `${z.tf} ${z.kind}` : `${z.kind}${z.fresh ? ' (fresh)' : ` (${z.touches}x tested)`}` });
       }
     }
     if (opts.highlightZone) boxes.push(opts.highlightZone);

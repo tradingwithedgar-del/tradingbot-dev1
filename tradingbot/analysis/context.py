@@ -20,6 +20,7 @@ class MarketContext:
     spread: float = 0.0
     news: dict = field(default_factory=dict)   # news state from NewsMonitor (empty in backtests)
     earnings: dict = field(default_factory=dict)  # upcoming/recent earnings + this stock's earnings history
+    htf: dict = field(default_factory=dict)     # higher-timeframe frames (analysis/htf.py), tf -> Frame
     _cache: dict = field(default_factory=dict, repr=False)
 
     # --- basics -----------------------------------------------------------

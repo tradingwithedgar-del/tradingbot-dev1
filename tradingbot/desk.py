@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from .analysis import htf
 from .config import Settings
 from .journal import Journal
 from .llm import Budget
@@ -30,8 +31,9 @@ log = logging.getLogger(__name__)
 
 CALLS_FULL, CALLS_SHORT = 5, 3     # with / without the rebuttal round
 
-PHILOSOPHY = ("TIIM trades price action first: supply/demand zones, divergences and market structure "
-              "(HH/HL, LH/LL). Fundamentals and news only reinforce or warn; they never create a trade on their own. "
+PHILOSOPHY = ("TIIM trades price action first, top-down: the Monthly, Weekly, Daily and 4H structure and zones "
+              "decide the direction, the 15-minute chart only times the entry. It reads supply/demand zones, divergences "
+              "and market structure (HH/HL, LH/LL). Fundamentals and news only reinforce or warn; they never create a trade on their own. "
               "Every trade has its stop decided before entry: 'how much am I willing to lose to be wrong'.")
 
 # --- schemas --------------------------------------------------------------------------------
@@ -113,6 +115,9 @@ def dossier(sig, ctx, dec: dict, brief: dict | None, events: list[str]) -> str:
         f"regime {f.get('regime')} / {f.get('trend_strength')} / volatility {f.get('volatility')}, RSI {f.get('rsi')}, "
         f"session {f.get('session')}, strategies agreeing on this side: {f.get('confluence', 0)}.",
         f"Last 24 closes (oldest first): {closes}",
+        f"Top-down read: {htf.describe(ctx.htf)}. Higher-timeframe zone at price: {f.get('htf_zone', 'none')}; "
+        f"nearest higher-timeframe zone in the trade's way: "
+        + (f"{f['htf_room_r']}R away" if f.get("htf_room_r") is not None else "none") + ".",
         f"TIIM's learned odds for this setup: estimated win rate {dec.get('p', 0):.0%}, expected {dec.get('expected_r', 0):+.2f}R "
         f"per trade (statistic '{dec.get('stat_key')}').",
         f"News state: {f.get('news_state', 'clear')}"

@@ -26,7 +26,8 @@ from .strategies import ExperimentalStrategy, Genome, Strategy, mutate, random_g
 
 CONDITION_KEYS = ["regime", "trend_strength", "volatility", "structure", "bias", "session", "rsi_zone",
                   "symbol", "with_structure", "zone_fresh", "divergence", "confluence",
-                  "news_state", "news_kind", "news_agree", "brief_agree"]
+                  "news_state", "news_kind", "news_agree", "brief_agree",
+                  "htf_align", "htf_zone"]
 
 
 

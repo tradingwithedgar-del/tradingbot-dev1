@@ -109,6 +109,9 @@ Every time a bar closes, for each symbol the agent:
   * `stop_too_tight` (stopped, then price hit the original target) → wider stop buffer
   * `immediately_wrong` (never got +0.3R) → stricter entry rules
   * `gave_back_profit` (was +1R, ended −1R) → move stop to break-even at +1.5R
+* **Top-down analysis.** Monthly, Weekly, Daily and 4H structure (HH/HL vs LH/LL) and zones decide the
+  direction; the 15m chart only times the entry. A 15m setup against that bias isn't traded for real unless price
+  is at a higher-timeframe zone (a real reversal spot). `HTF_FILTER=0` turns the filter off.
 * **Trading desk.** Before a setup becomes a real trade, Claude agents research the fundamentals, argue the
   bull and bear case, and TIIM's judge takes it, halves it or skips it. A nightly Strategy Lab backtests new
   strategy ideas and adds those that win 70%+ of the time. See [DESK.md](DESK.md).

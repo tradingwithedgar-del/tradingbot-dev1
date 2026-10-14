@@ -117,6 +117,8 @@ class TradeLockerBroker(Broker):
         df.index = pd.to_datetime(df["t"], unit="ms", utc=True)
         return df[["open", "high", "low", "close", "volume"]].astype(float)
 
+    supports_htf = True   # daily / 4H history can be requested directly
+
     def get_bars(self, symbol: str, timeframe: str, count: int, max_days: int = 400) -> pd.DataFrame:
         """Latest `count` closed bars. Walks back in chunks (the API caps rows per request), so
         instruments that only trade part of the day, like stocks, still get enough history."""

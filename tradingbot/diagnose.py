@@ -11,6 +11,7 @@ from .learning import CANDIDATE
 
 # How a shadow decision's last reason maps to a human explanation.
 REASON_GROUPS = [
+    ("against the higher timeframes", "the 15m setup pointed against the Monthly/Weekly/Daily/4H trend (top-down filter)"),
     ("desk veto", "the trading desk vetoed it (still followed virtually to grade the veto)"),
     ("while the desk debated", "price moved while the desk debated"),
     ("desk is already debating", "the desk was busy with another setup on that market"),

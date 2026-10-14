@@ -10,6 +10,7 @@ import pandas as pd
 
 from . import postmortem as pm
 from .analysis.context import MarketContext
+from .analysis import htf
 from .analysis.view import chart_view
 from .broker.base import TIMEFRAME_SECONDS, Broker
 from .compliance import Compliance
@@ -54,6 +55,7 @@ class Agent:
         self._snap: dict[str, dict] = {}      # per-market snapshot for the Research Analyst
         self._lab_seen = ""
         self._started = pd.Timestamp.now(tz="UTC")
+        self._htf_cache: dict[str, tuple[str, dict]] = {}
         # The strategy library: built-ins plus anything in my_strategies/ (minus disabled ones).
         self.core: list[Strategy] = load_library(settings.db_path.parent, journal=journal)
         self.news_strats: list[Strategy] = [st for st in self.core if "news" in st.needs]
@@ -160,14 +162,14 @@ class Agent:
             except Exception:  # pragma: no cover - network
                 quote, spread = None, 0.0
             ctx = MarketContext(symbol, df, spread=spread, news=self._news_state(symbol, now_ts),
-                                earnings=self._earnings_state(symbol, now_ts))
+                                earnings=self._earnings_state(symbol, now_ts), htf=self._htf_frames(symbol, df))
             c = df["close"]
             self._snap[symbol] = {"price": float(c.iloc[-1]), "trend": ctx.trend,
                                   "chg_1d": float(c.iloc[-1] / c.iloc[-min(len(c), 96)] * 100 - 100),
                                   "chg_5d": float(c.iloc[-1] / c.iloc[0] * 100 - 100)}
             if live_clock:
                 try:
-                    self.j.set(f"view:{self.j.mode}:{symbol}", chart_view(ctx))
+                    self.j.set(f"view:{self.j.mode}:{symbol}", self._view_with_htf(ctx))
                 except Exception:
                     log.exception("chart view failed for %s", symbol)
             self._manage_open(ctx)
@@ -191,6 +193,41 @@ class Agent:
             self.j.set(f"halted:{self.j.mode}", msg)
             self.j.event("halt", msg, ts=self.now())
             log.error(msg)
+
+    # --- top-down (higher timeframe) analysis ---------------------------------------------
+    def _htf_frames(self, symbol: str, df: pd.DataFrame) -> dict:
+        """Monthly/Weekly/Daily/4H read, refreshed once per 4-hour period (cached in between)."""
+        key = df.index[-1].floor("4h").isoformat()
+        hit = self._htf_cache.get(symbol)
+        if hit and hit[0] == key:
+            return hit[1]
+        frames = {}
+        try:
+            if getattr(self.broker, "supports_htf", False):
+                daily = self.broker.get_bars(symbol, "1D", 1500, max_days=2300)
+                h4 = self.broker.get_bars(symbol, "4H", 400, max_days=120)
+            else:   # backtests: build them from the lower-timeframe history
+                base = self.broker.get_bars(symbol, self.s.timeframe, 3000)
+                daily, h4 = htf.resample(base, "1D"), htf.resample(base, "4h")
+            frames = htf.build(daily, h4)
+        except Exception as e:  # pragma: no cover - network
+            log.warning("higher-timeframe bars for %s failed: %s", symbol, e)
+        self._htf_cache[symbol] = (key, frames)
+        return frames
+
+    def _view_with_htf(self, ctx: MarketContext) -> dict:
+        v = chart_view(ctx)
+        b, score = htf.bias(ctx.htf)
+        v["htf"] = {"bias": b, "score": score, "frames": [ctx.htf[tf].to_dict() for tf in htf.FRAMES if tf in ctx.htf]}
+        lo, hi = min(v["low"][-200:] or [0]), max(v["high"][-200:] or [0])
+        span = (hi - lo) or 1.0
+        for tf in ("1W", "1D", "4H"):
+            f = ctx.htf.get(tf)
+            for z in (f.zones if f else []):
+                if z["top"] >= lo - span and z["bottom"] <= hi + span:   # near the visible price range
+                    v["zones"].append({"kind": z["kind"], "top": z["top"], "bottom": z["bottom"], "from": v["t"][0],
+                                       "fresh": z["fresh"], "touches": 0, "tf": htf.SHORT[tf]})
+        return v
 
     # --- news handling -------------------------------------------------------------------
     def _flatten_for_news(self, now: pd.Timestamp) -> None:
@@ -501,6 +538,8 @@ class Agent:
             sig.features["symbol"] = ctx.symbol
             nd = int((ctx.news or {}).get("news_dir", 0) or 0)
             sig.features["news_agree"] = "none" if not nd else ("with" if (nd > 0) == (sig.side == "buy") else "against")
+            sig.features.update(htf.features(ctx.htf, sig.side, float(ctx.bar["low"]), float(ctx.bar["high"]),
+                                             sig.entry, sig.stop))
             brief = self.desk.brief_for(ctx.symbol) if self.desk else None
             bias = (brief or {}).get("bias", "neutral")
             sig.features["brief_agree"] = "none" if bias == "neutral" else (
@@ -553,6 +592,11 @@ class Agent:
         gap = entry_block(sig.symbol, pd.Timestamp(self.now()))
         if gap:
             return gap
+        f = sig.features
+        if self.s.htf_filter and f.get("htf_align") == "against" and not f.get("htf_reversal_spot"):
+            frames = ", ".join(f"{k[4:]} {v}" for k, v in f.items() if k in ("htf_M", "htf_W", "htf_D", "htf_4H"))
+            return (f"against the higher timeframes ({frames}; bias {f.get('htf_bias')}) - a 15m "
+                    f"{sig.side} needs them on its side or price at a higher-timeframe {'demand' if sig.side == 'buy' else 'supply'} zone")
         if self.news:
             strat = next((st for st in self.core if st.name == sig.strategy.split(CANDIDATE)[0]), None)
             reason = self.news.blackout(sig.symbol, pd.Timestamp(self.now()),
