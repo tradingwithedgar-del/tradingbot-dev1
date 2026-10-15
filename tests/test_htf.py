@@ -68,3 +68,35 @@ def test_backtest_records_top_down_features(tmp_path):
         f = t["features"]
         if not t["shadow"]:
             assert not (f.get("htf_align") == "against" and not f.get("htf_reversal_spot"))
+
+
+def test_exhausted_move_is_not_chased():
+    from tradingbot.agent import Agent
+    from tradingbot.broker.sim import SimBroker
+    from tradingbot.journal import Journal
+    from tradingbot.strategies import Signal
+    import tempfile
+    from pathlib import Path
+
+    # 4H: steady chop, then 7 red candles falling hard (like USTECH -3.4% with 7 red 4H candles)
+    base = zigzag(120, 0.0, "4h")
+    c = list(base["close"].to_numpy()[:-7]) + [100 - 3 * k for k in range(1, 8)]
+    h4 = pd.DataFrame({"close": c}, index=base.index)
+    h4["open"] = h4["close"].shift(1).fillna(h4["close"].iloc[0]) + 0.0
+    h4["high"], h4["low"], h4["volume"] = h4[["open", "close"]].max(axis=1) + 0.5, h4[["open", "close"]].min(axis=1) - 0.5, 1.0
+    frames = htf.build(zigzag(900, 0.0, "1D"), h4)
+    price = float(h4["close"].iloc[-1])
+    sell = htf.features(frames, "sell", price - 1, price + 1, price, price + 2)
+    buy = htf.features(frames, "buy", price - 1, price + 1, price, price - 2)
+    assert sell["ext_streak_4h"] == 7 and sell["extended"] == "exhausted"
+    assert buy["extended"] in ("no", "stretched") and buy["ext_streak_4h"] == 0
+    assert "7 red 4H candles in a row" in htf.extension_text(sell, "sell")
+
+    s = Settings()
+    s.mode = "backtest"
+    j = Journal(Path(tempfile.mkdtemp()) / "x.db", mode="backtest")
+    agent = Agent(s, SimBroker({"BTCUSD": synthetic(600, 100, seed=2)}, warmup=300), j)
+    sig = Signal("BTCUSD", "structure_trend", "sell", 100.0, 100.5, 98.5, features=sell)
+    ctx = type("C", (), {"close": 100.0, "atr_now": 1.0})()
+    why = agent._entry_blocker(sig, ctx, agent.broker.get_quote("BTCUSD"), [], set())
+    assert why and "chasing an exhausted move" in why

@@ -171,6 +171,9 @@ class Settings:
     # Top-down filter: no real 15m trade against the Monthly/Weekly/Daily/4H bias unless price is at a
     # higher-timeframe zone (HTF_FILTER=0 turns it off; blocked setups are still followed virtually).
     htf_filter: bool = field(default_factory=lambda: os.getenv("HTF_FILTER", "1") not in {"0", "false", "no", "NO"})
+    # Don't chase: no real trade in the direction of a move that is already exhausted (long 4H streak, far
+    # from the 4H average, big day, extreme RSI). EXTENSION_FILTER=0 turns it off.
+    extension_filter: bool = field(default_factory=lambda: os.getenv("EXTENSION_FILTER", "1") not in {"0", "false", "no", "NO"})
     history_bars: int = 400
     poll_seconds: int = 20
     db_path: Path = field(default_factory=lambda: DATA_DIR / "bot.db")

@@ -593,6 +593,9 @@ class Agent:
         if gap:
             return gap
         f = sig.features
+        if self.s.extension_filter and f.get("extended") == "exhausted":
+            return (f"chasing an exhausted move ({htf.extension_text(f, sig.side)}) - a pullback against the "
+                    f"trade is likely before the target; waiting for a better entry")
         if self.s.htf_filter and f.get("htf_align") == "against" and not f.get("htf_reversal_spot"):
             frames = ", ".join(f"{k[4:]} {v}" for k, v in f.items() if k in ("htf_M", "htf_W", "htf_D", "htf_4H"))
             return (f"against the higher timeframes ({frames}; bias {f.get('htf_bias')}) - a 15m "

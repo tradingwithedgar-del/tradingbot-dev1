@@ -566,7 +566,9 @@ async function showTrade(id) {
       `<p>Higher-timeframe bias: <b>${esc(f.bias || '—')}</b> (EMA 50 vs 200)</p><p>Regime: ${esc(f.regime || '—')} · session ${esc(f.session || '—')}</p>` +
       `<p>RSI ${f.rsi ?? '—'} (${esc(f.rsi_zone || '')})</p>` +
       (f.htf_align ? `<p>Top-down: Monthly ${esc(f.htf_M || '—')} · Weekly ${esc(f.htf_W || '—')} · Daily ${esc(f.htf_D || '—')} · 4H ${esc(f.htf_4H || '—')} → bias <b>${esc(f.htf_bias || '—')}</b>, this trade is <b>${esc(f.htf_align)}</b> it` +
-        `${f.htf_zone && f.htf_zone !== 'none' ? `, price at a ${esc(f.htf_zone)} zone` : ''}${f.htf_room_r != null ? `; nearest higher-timeframe zone in the way ${f.htf_room_r}R` : ''}.</p>` : '')),
+        `${f.htf_zone && f.htf_zone !== 'none' ? `, price at a ${esc(f.htf_zone)} zone` : ''}${f.htf_room_r != null ? `; nearest higher-timeframe zone in the way ${f.htf_room_r}R` : ''}.</p>` : '') +
+      (f.extended && f.extended !== 'unknown' ? `<p>Move already ${esc(f.extended === 'no' ? 'not stretched' : f.extended)}: ${f.ext_streak_4h} 4H candles the trade's way, ` +
+        `${f.ext_stretch_4h} ATR from the 4H average, today ${f.ext_day_move} daily ATRs, 4H RSI ${f.ext_rsi_4h}.</p>` : '')),
     box('News', news),
     box('Risk plan', `<p>Entry <b>${px(t.entry)}</b> · stop <b>${px(t.stop)}</b> · target <b>${px(t.take_profit)}</b></p>` +
       `<p>Wrong if price reaches ${px(t.stop)} (${px(risk)} away). Target is ${risk ? (Math.abs(t.take_profit - t.entry) / risk).toFixed(1) : '—'}× that distance.</p>` +

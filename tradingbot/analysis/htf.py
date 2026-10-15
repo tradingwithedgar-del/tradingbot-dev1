@@ -11,6 +11,9 @@ supply/demand zones. Together they give:
 
 A 15m sell that makes a lower high inside a Daily/Weekly uptrend is "against". TIIM doesn't take
 those for real unless price is reacting at a higher-timeframe supply zone (a genuine reversal spot).
+
+It also measures how stretched the move already is (`extension`), so TIIM doesn't chase: selling after
+seven red 4H candles and a -3% day usually means selling right before the pullback that takes the stop.
 """
 from __future__ import annotations
 
@@ -19,7 +22,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from .indicators import atr as atr_fn
-from .indicators import ema
+from .indicators import ema, rsi
 from .structure import find_swings, structure_sequence, trend_state
 from .zones import find_zones
 
@@ -38,6 +41,11 @@ class Frame:
     ema_side: str = ""              # price above/below the 20-period EMA of that timeframe
     zones: list = field(default_factory=list)   # [{kind, top, bottom, fresh}]
     bars: int = 0
+    close: float = 0.0
+    atr: float = 0.0
+    streak: int = 0                 # consecutive candles of one colour at the end: +5 = five green, -7 = seven red
+    stretch_atr: float = 0.0        # (close - EMA20) / ATR: how far price has run from its average
+    rsi: float = 50.0
 
     @property
     def direction(self) -> int:
@@ -45,7 +53,8 @@ class Frame:
 
     def to_dict(self) -> dict:
         return {"tf": self.tf, "name": NAMES[self.tf], "trend": self.trend, "sequence": self.sequence,
-                "ema_side": self.ema_side, "zones": self.zones, "bars": self.bars}
+                "ema_side": self.ema_side, "zones": self.zones, "bars": self.bars, "streak": self.streak,
+                "stretch_atr": round(self.stretch_atr, 2), "rsi": round(self.rsi, 1)}
 
 
 def resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
@@ -71,8 +80,17 @@ def analyze_frame(tf: str, df: pd.DataFrame, max_zones: int = 4) -> Frame:
             zones.append({"kind": z.kind, "top": z.top, "bottom": z.bottom, "fresh": z.fresh,
                           "from": df.index[z.base_start].isoformat()})
         zones = zones[-max_zones:]
+    a = float(atr_fn(df, 14).iloc[-1]) or 1e-12
+    body = (df["close"] - df["open"]).to_numpy()
+    streak = 0
+    for b in body[::-1]:
+        sign = 1 if b > 0 else -1 if b < 0 else 0
+        if sign == 0 or (streak and (sign > 0) != (streak > 0)):
+            break
+        streak += sign
+    r = float(rsi(df["close"], 14).iloc[-1])
     return Frame(tf, trend_state(swings, close), structure_sequence(swings, 4), "above" if close > e else "below",
-                 zones, n)
+                 zones, n, close, a, streak, (close - e) / a, r if r == r else 50.0)
 
 
 def build(daily: pd.DataFrame, h4: pd.DataFrame) -> dict[str, Frame]:
@@ -122,6 +140,45 @@ def room_r(frames: dict[str, Frame], side: str, entry: float, stop: float) -> fl
     return None if best is None else round(best, 2)
 
 
+# A move counts as stretched in the trade's direction when (each adds one point):
+EXT_STREAK = 5          # 5+ 4H candles in a row the trade's way
+EXT_STRETCH = 2.0       # price 2+ 4H ATRs from the 4H 20-EMA, the trade's way
+EXT_DAY_MOVE = 1.2      # today already moved 1.2+ daily ATRs the trade's way
+EXT_RSI = 30            # 4H RSI at/below 30 for a sell, at/above 70 for a buy
+EXHAUSTED = 2           # points at which TIIM won't chase
+
+
+def extension(frames: dict[str, Frame], side: str, price: float) -> dict:
+    """How far the move has already run in the trade's direction, from the 4H and Daily candles."""
+    d = 1 if side == "buy" else -1
+    h4, day = frames.get("4H"), frames.get("1D")
+    if h4 is None or h4.bars < 20:
+        return {"extended": "unknown"}
+    streak = max(0, h4.streak * d)
+    stretch = h4.stretch_atr * d
+    day_move = ((price - day.close) / day.atr * d) if day and day.atr else 0.0
+    rsi_hit = h4.rsi >= 100 - EXT_RSI if d > 0 else h4.rsi <= EXT_RSI
+    score = int(streak >= EXT_STREAK) + int(stretch >= EXT_STRETCH) + int(day_move >= EXT_DAY_MOVE) + int(rsi_hit)
+    return {"ext_streak_4h": streak, "ext_stretch_4h": round(stretch, 2), "ext_day_move": round(day_move, 2),
+            "ext_rsi_4h": round(h4.rsi, 1), "ext_score": score,
+            "extended": "exhausted" if score >= EXHAUSTED else ("stretched" if score else "no")}
+
+
+def extension_text(f: dict, side: str) -> str:
+    colour = "green" if side == "buy" else "red"
+    parts = []
+    if f.get("ext_streak_4h", 0) >= EXT_STREAK:
+        parts.append(f"{f['ext_streak_4h']} {colour} 4H candles in a row")
+    if f.get("ext_stretch_4h", 0) >= EXT_STRETCH:
+        parts.append(f"{f['ext_stretch_4h']:.1f} ATR {'above' if side == 'buy' else 'below'} the 4H average")
+    if f.get("ext_day_move", 0) >= EXT_DAY_MOVE:
+        parts.append(f"today already {f['ext_day_move']:.1f} daily ATRs {'up' if side == 'buy' else 'down'}")
+    rsi_v = f.get("ext_rsi_4h")
+    if rsi_v is not None and (rsi_v >= 100 - EXT_RSI if side == "buy" else rsi_v <= EXT_RSI):
+        parts.append(f"4H RSI {rsi_v:.0f}")
+    return ", ".join(parts) or "not stretched"
+
+
 def features(frames: dict[str, Frame], side: str, low: float, high: float, entry: float, stop: float) -> dict:
     if not frames:
         return {"htf_align": "unknown"}
@@ -137,6 +194,7 @@ def features(frames: dict[str, Frame], side: str, low: float, high: float, entry
         "htf_reversal_spot": bool(at and at[1] == ("demand" if side == "buy" else "supply")),
         "htf_room_r": room_r(frames, side, entry, stop),
     })
+    feats.update(extension(frames, side, entry))
     return feats
 
 

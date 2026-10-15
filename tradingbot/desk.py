@@ -118,6 +118,8 @@ def dossier(sig, ctx, dec: dict, brief: dict | None, events: list[str]) -> str:
         f"Top-down read: {htf.describe(ctx.htf)}. Higher-timeframe zone at price: {f.get('htf_zone', 'none')}; "
         f"nearest higher-timeframe zone in the trade's way: "
         + (f"{f['htf_room_r']}R away" if f.get("htf_room_r") is not None else "none") + ".",
+        f"How stretched the move already is in the trade's direction: {f.get('extended', 'unknown')} "
+        f"({htf.extension_text(f, sig.side)}).",
         f"TIIM's learned odds for this setup: estimated win rate {dec.get('p', 0):.0%}, expected {dec.get('expected_r', 0):+.2f}R "
         f"per trade (statistic '{dec.get('stat_key')}').",
         f"News state: {f.get('news_state', 'clear')}"
