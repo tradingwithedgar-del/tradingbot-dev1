@@ -27,8 +27,9 @@ from .structure import find_swings, structure_sequence, trend_state
 from .zones import find_zones
 
 FRAMES = ("1M", "1W", "1D", "4H")
-NAMES = {"1M": "Monthly", "1W": "Weekly", "1D": "Daily", "4H": "4H"}
-SHORT = {"1M": "M", "1W": "W", "1D": "D", "4H": "4H"}
+NAMES = {"1M": "Monthly", "1W": "Weekly", "1D": "Daily", "4H": "4H", "1H": "1H"}
+SHORT = {"1M": "M", "1W": "W", "1D": "D", "4H": "4H", "1H": "1H"}
+PATTERN_FRAMES = ("4H", "1H")   # where breaks of structure / support breaks are looked for (1H isn't in the bias)
 WEIGHTS = {"1M": 1, "1W": 2, "1D": 3, "4H": 2}
 BIAS_THRESHOLD = 3          # weighted score needed for a clear bull/bear bias (max is 8)
 
@@ -46,6 +47,7 @@ class Frame:
     streak: int = 0                 # consecutive candles of one colour at the end: +5 = five green, -7 = seven red
     stretch_atr: float = 0.0        # (close - EMA20) / ATR: how far price has run from its average
     rsi: float = 50.0
+    breaks: list = field(default_factory=list)  # recent structure / level breaks, newest last (see find_breaks)
 
     @property
     def direction(self) -> int:
@@ -54,7 +56,7 @@ class Frame:
     def to_dict(self) -> dict:
         return {"tf": self.tf, "name": NAMES[self.tf], "trend": self.trend, "sequence": self.sequence,
                 "ema_side": self.ema_side, "zones": self.zones, "bars": self.bars, "streak": self.streak,
-                "stretch_atr": round(self.stretch_atr, 2), "rsi": round(self.rsi, 1)}
+                "stretch_atr": round(self.stretch_atr, 2), "rsi": round(self.rsi, 1), "breaks": self.breaks}
 
 
 def resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
@@ -89,12 +91,58 @@ def analyze_frame(tf: str, df: pd.DataFrame, max_zones: int = 4) -> Frame:
             break
         streak += sign
     r = float(rsi(df["close"], 14).iloc[-1])
+    breaks = find_breaks(df, swings, a) if tf in PATTERN_FRAMES else []
     return Frame(tf, trend_state(swings, close), structure_sequence(swings, 4), "above" if close > e else "below",
-                 zones, n, close, a, streak, (close - e) / a, r if r == r else 50.0)
+                 zones, n, close, a, streak, (close - e) / a, r if r == r else 50.0, breaks)
 
 
-def build(daily: pd.DataFrame, h4: pd.DataFrame) -> dict[str, Frame]:
-    """All four frames from daily and 4H candles (weekly and monthly are built from the daily ones)."""
+def find_breaks(df: pd.DataFrame, swings, atr: float, lookback: int = 30, level_tol_atr: float = 0.35,
+                min_touches: int = 2) -> list[dict]:
+    """Recent breaks on this timeframe, each the first close through the level:
+
+      bos   - break of structure: after a lower high, a close below the last higher low (bearish), or after a
+              higher low, a close above the last lower high (bullish)
+      level - a support/resistance level that rejected price 2+ times finally closes through
+    """
+    c = df["close"].to_numpy()
+    n = len(c)
+    out: list[dict] = []
+    tol = level_tol_atr * atr
+    for k in range(max(2, n - lookback), n):
+        known = [s for s in swings if s.confirmed_at < k]
+        hs = [s for s in known if s.kind == "H"]
+        ls = [s for s in known if s.kind == "L"]
+        if hs and ls:
+            h, lo = hs[-1], ls[-1]
+            if h.label == "LH" and c[k] < lo.price <= c[k - 1]:
+                out.append({"type": "bos", "dir": -1, "level": lo.price, "swing": h.price, "k": k})
+            if lo.label == "HL" and c[k] > h.price >= c[k - 1]:
+                out.append({"type": "bos", "dir": 1, "level": h.price, "swing": lo.price, "k": k})
+        for kind, d in (("L", -1), ("H", 1)):
+            pts = [s for s in (ls if kind == "L" else hs) if k - s.idx <= 150]
+            if len(pts) < min_touches:
+                continue
+            ref = pts[-1].price
+            cluster = [s for s in pts if abs(s.price - ref) <= tol]
+            if len(cluster) < min_touches:
+                continue
+            level = (min if d < 0 else max)(s.price for s in cluster)
+            first = min(s.idx for s in cluster)
+            held = c[first:k]
+            if d < 0 and c[k] < level - 0.1 * atr and held.min() >= level - 0.1 * atr:
+                out.append({"type": "level", "dir": -1, "level": level, "touches": len(cluster), "k": k,
+                            "swing": max(s.price for s in hs[-3:]) if hs else level})
+            if d > 0 and c[k] > level + 0.1 * atr and held.max() <= level + 0.1 * atr:
+                out.append({"type": "level", "dir": 1, "level": level, "touches": len(cluster), "k": k,
+                            "swing": min(s.price for s in ls[-3:]) if ls else level})
+    for b in out:
+        b["bars_ago"] = n - 1 - b.pop("k")
+        b["time"] = df.index[n - 1 - b["bars_ago"]].isoformat()
+    return out[-6:]
+
+
+def build(daily: pd.DataFrame, h4: pd.DataFrame, h1: pd.DataFrame | None = None) -> dict[str, Frame]:
+    """All frames from daily, 4H (and 1H) candles. Weekly and monthly are built from the daily ones."""
     out = {}
     if daily is not None and len(daily):
         out["1M"] = analyze_frame("1M", resample(daily, "MS"))
@@ -102,12 +150,14 @@ def build(daily: pd.DataFrame, h4: pd.DataFrame) -> dict[str, Frame]:
         out["1D"] = analyze_frame("1D", daily)
     if h4 is not None and len(h4):
         out["4H"] = analyze_frame("4H", h4)
+    if h1 is not None and len(h1):
+        out["1H"] = analyze_frame("1H", h1)
     return out
 
 
 def bias(frames: dict[str, Frame]) -> tuple[str, int]:
-    score = sum(WEIGHTS[tf] * f.direction for tf, f in frames.items())
-    known = sum(1 for f in frames.values() if f.trend != "unknown")
+    score = sum(WEIGHTS.get(tf, 0) * f.direction for tf, f in frames.items())
+    known = sum(1 for tf, f in frames.items() if tf in WEIGHTS and f.trend != "unknown")
     if known < 2:
         return "unknown", score
     return ("bull" if score >= BIAS_THRESHOLD else "bear" if score <= -BIAS_THRESHOLD else "mixed"), score
@@ -186,7 +236,7 @@ def features(frames: dict[str, Frame], side: str, low: float, high: float, entry
     want = "bull" if side == "buy" else "bear"
     align = "unknown" if b == "unknown" else ("mixed" if b == "mixed" else ("with" if b == want else "against"))
     at = zone_at(frames, low, high)
-    feats = {f"htf_{SHORT[tf]}": f.trend for tf, f in frames.items()}
+    feats = {f"htf_{SHORT[tf]}": f.trend for tf, f in frames.items() if tf in WEIGHTS}
     feats.update({
         "htf_bias": b, "htf_score": score, "htf_align": align,
         "htf_zone": f"{SHORT[at[0]]} {at[1]}" if at else "none",

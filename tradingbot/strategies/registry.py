@@ -25,6 +25,7 @@ BUILTIN_MODULES = [
     "tradingbot.strategies.core",
     "tradingbot.strategies.news",
     "tradingbot.strategies.earnings",
+    "tradingbot.strategies.breakout",
 ]
 USER_DIR = ROOT / "my_strategies"
 

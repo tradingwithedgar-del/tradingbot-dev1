@@ -57,10 +57,10 @@ def test_sell_against_uptrend_is_blocked_unless_at_htf_supply():
 
 
 def test_backtest_records_top_down_features(tmp_path):
-    j = run_backtest({"A": synthetic(3000, 1.10, seed=5)}, Settings(), db_path=tmp_path / "h.db", seed=1)
+    j = run_backtest({"A": synthetic(2000, 1.10, seed=5)}, Settings(), db_path=tmp_path / "h.db", seed=1)
     trades = j.trades("mode='backtest'")
     assert trades
-    late = [t for t in trades if t["opened_at"] > "2025-01-25"]
+    late = [t for t in trades if t["opened_at"] > "2025-01-18"]
     assert late and all(t["features"].get("htf_align") in ("with", "against", "mixed", "unknown") for t in late)
     assert any(t["features"].get("htf_D") for t in late)
     # no real trade went against the top-down bias without being at a higher-timeframe zone
@@ -100,3 +100,38 @@ def test_exhausted_move_is_not_chased():
     ctx = type("C", (), {"close": 100.0, "atr_now": 1.0})()
     why = agent._entry_blocker(sig, ctx, agent.broker.get_quote("BTCUSD"), [], set())
     assert why and "chasing an exhausted move" in why
+
+
+def test_break_retest_sells_the_first_pullback_after_a_support_break():
+    from tradingbot.analysis.context import MarketContext
+    from tradingbot.strategies.breakout import BreakRetest
+
+    # 1H: support at ~103.7 rejected twice, a lower high, then a close below it (like the USTECH chart)
+    pts = [(0, 100), (10, 110), (20, 104), (30, 112), (40, 104.2), (50, 109), (60, 103.5), (66, 101)]
+    x = np.arange(67)
+    y = np.interp(x, [p[0] for p in pts], [p[1] for p in pts])
+    idx = pd.date_range("2026-10-01", periods=67, freq="1h", tz="UTC")
+    h1 = pd.DataFrame({"open": np.r_[y[0], y[:-1]], "close": y}, index=idx)
+    h1["high"], h1["low"], h1["volume"] = h1[["open", "close"]].max(axis=1) + 0.3, h1[["open", "close"]].min(axis=1) - 0.3, 1.0
+    frame = htf.analyze_frame("1H", h1)
+    kinds = {(b["type"], b["dir"]) for b in frame.breaks}
+    assert ("bos", -1) in kinds and ("level", -1) in kinds
+
+    # 15m: drifted below the level, small pullback up toward it, then a red candle breaking the previous low
+    closes = list(np.linspace(104.5, 103.2, 250)) + [102.8, 102.6, 102.7, 102.95, 103.15, 103.3, 103.25, 102.9]
+    t = pd.date_range("2026-10-03T12:00", periods=len(closes), freq="15min", tz="UTC")
+    df = pd.DataFrame({"close": closes}, index=t)
+    df["open"] = df["close"].shift(1).fillna(df["close"].iloc[0])
+    df["high"] = df[["open", "close"]].max(axis=1) + 0.05
+    df["low"] = df[["open", "close"]].min(axis=1) - 0.05
+    df["volume"] = 1.0
+    brk = [b for b in frame.breaks if b["dir"] == -1][-1]
+    frame.breaks = [dict(brk, bars_ago=2)]                     # the break happened 2 hours ago
+    ctx = MarketContext("US30", df, htf={"1H": frame})
+    sig = BreakRetest().generate(ctx)
+    assert sig is not None and sig.side == "sell"
+    assert sig.stop > max(closes[-8:-1])                       # stop just above the pullback high
+    assert sig.stop - sig.entry < 1.5                          # small risk: entered early, near the break
+    assert "1H" in sig.reason and sig.features["break_tf"] == "1H"
+    frame.breaks = [dict(brk, bars_ago=30)]                    # break too long ago: too late, no trade
+    assert BreakRetest().generate(MarketContext("US30", df, htf={"1H": frame})) is None

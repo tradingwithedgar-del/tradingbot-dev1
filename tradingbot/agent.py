@@ -196,8 +196,8 @@ class Agent:
 
     # --- top-down (higher timeframe) analysis ---------------------------------------------
     def _htf_frames(self, symbol: str, df: pd.DataFrame) -> dict:
-        """Monthly/Weekly/Daily/4H read, refreshed once per 4-hour period (cached in between)."""
-        key = df.index[-1].floor("4h").isoformat()
+        """Monthly/Weekly/Daily/4H/1H read, refreshed once an hour (cached in between)."""
+        key = df.index[-1].floor("1h").isoformat()   # 1H breaks matter, so refresh every hour
         hit = self._htf_cache.get(symbol)
         if hit and hit[0] == key:
             return hit[1]
@@ -206,10 +206,11 @@ class Agent:
             if getattr(self.broker, "supports_htf", False):
                 daily = self.broker.get_bars(symbol, "1D", 1500, max_days=2300)
                 h4 = self.broker.get_bars(symbol, "4H", 400, max_days=120)
+                h1 = self.broker.get_bars(symbol, "1H", 400, max_days=40)
             else:   # backtests: build them from the lower-timeframe history
                 base = self.broker.get_bars(symbol, self.s.timeframe, 3000)
-                daily, h4 = htf.resample(base, "1D"), htf.resample(base, "4h")
-            frames = htf.build(daily, h4)
+                daily, h4, h1 = htf.resample(base, "1D"), htf.resample(base, "4h"), htf.resample(base, "1h")
+            frames = htf.build(daily, h4, h1)
         except Exception as e:  # pragma: no cover - network
             log.warning("higher-timeframe bars for %s failed: %s", symbol, e)
         self._htf_cache[symbol] = (key, frames)
