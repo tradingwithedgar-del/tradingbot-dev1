@@ -309,6 +309,10 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 "daily_calls": st.desk.daily_calls, "brief": j.get("desk:brief") or {},
                 "scorecard": scorecard(j, st), "debates": debates, "lab": j.get("lab:report") or {}}
 
+    @app.get("/api/plan")
+    def weekly_plan(mode: str):
+        return j.get(f"plan:{mode}") or {}
+
     @app.get("/api/events")
     def events(mode: str, limit: int = 200):
         return j.events(limit, mode)

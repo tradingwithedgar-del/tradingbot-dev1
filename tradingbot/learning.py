@@ -27,7 +27,7 @@ from .strategies import ExperimentalStrategy, Genome, Strategy, mutate, random_g
 CONDITION_KEYS = ["regime", "trend_strength", "volatility", "structure", "bias", "session", "rsi_zone",
                   "symbol", "with_structure", "zone_fresh", "divergence", "confluence",
                   "news_state", "news_kind", "news_agree", "brief_agree",
-                  "htf_align", "htf_zone", "extended"]
+                  "htf_align", "htf_zone", "extended", "pattern", "plan_agree"]
 
 
 
@@ -163,7 +163,9 @@ class Learner:
         self.save()
 
     # --- decisions -------------------------------------------------------------------
-    def decide(self, strategy: Strategy, features: dict, symbol: str, live_approved: list[str]) -> Decision:
+    def decide(self, strategy: Strategy, features: dict, symbol: str, live_approved: list[str],
+               rr: float | None = None) -> Decision:
+        """`rr`: this setup's own reward multiple when it has one (e.g. a pattern's measured move)."""
         s = strategy.name
         reasons: list[str] = []
         if CANDIDATE in s:
@@ -195,7 +197,7 @@ class Learner:
             a, b = st.p_params(self.cfg)
             p = self.rng.betavariate(a, b)      # explore on demo
             reasons.append("demo: Thompson-sampled win rate")
-        er = st.expected_r(p, self.rr_for(s))
+        er = st.expected_r(p, rr or self.rr_for(s))
         if er <= self.cfg.min_expected_r:
             return Decision("shadow", p, er, key, reasons + [f"expected {er:+.2f}R not positive"])
         return Decision("trade", p, er, key, reasons + [f"expected {er:+.2f}R"])

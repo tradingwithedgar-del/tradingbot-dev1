@@ -61,6 +61,17 @@ REBUTTAL_SCHEMA = {
     "properties": {"rebuttal": {"type": "string"}, "conviction": {"type": "integer"}},
     "required": ["rebuttal", "conviction"], "additionalProperties": False,
 }
+WEEKLY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "overview": {"type": "string"},
+        "markets": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"symbol": {"type": "string"}, "priority": {"type": "integer"}, "comment": {"type": "string"}},
+            "required": ["symbol", "priority", "comment"], "additionalProperties": False}},
+    },
+    "required": ["overview", "markets"], "additionalProperties": False,
+}
 VERDICT_SCHEMA = {
     "type": "object",
     "properties": {"action": {"type": "string", "enum": ["take", "half", "skip"]},
@@ -100,7 +111,7 @@ def _clip(n, lo=0, hi=10) -> int:
         return lo
 
 
-def dossier(sig, ctx, dec: dict, brief: dict | None, events: list[str]) -> str:
+def dossier(sig, ctx, dec: dict, brief: dict | None, events: list[str], plan: dict | None = None) -> str:
     """Everything the desk is allowed to know about one setup, in plain text."""
     f = sig.features
     dist = abs(sig.entry - sig.stop) or 1e-12
@@ -118,6 +129,7 @@ def dossier(sig, ctx, dec: dict, brief: dict | None, events: list[str]) -> str:
         f"Top-down read: {htf.describe(ctx.htf)}. Higher-timeframe zone at price: {f.get('htf_zone', 'none')}; "
         f"nearest higher-timeframe zone in the trade's way: "
         + (f"{f['htf_room_r']}R away" if f.get("htf_room_r") is not None else "none") + ".",
+        f"This week's plan for {sig.symbol}: {(plan or {}).get('summary', 'none')}",
         f"How stretched the move already is in the trade's direction: {f.get('extended', 'unknown')} "
         f"({htf.extension_text(f, sig.side)}).",
         f"TIIM's learned odds for this setup: estimated win rate {dec.get('p', 0):.0%}, expected {dec.get('expected_r', 0):+.2f}R "
@@ -237,6 +249,37 @@ class Desk:
         self.j.event("desk", f"Research brief: {brief['overview'][:160]}")
         return brief
 
+    # --- weekly briefing ------------------------------------------------------------------
+    def weekly_briefing(self, week: str, now: pd.Timestamp) -> None:
+        self._run(self._do_briefing, week, now)
+
+    def _do_briefing(self, week: str, now: pd.Timestamp) -> None:
+        book = self.j.get(f"plan:{self.s.mode}") or {}
+        if book.get("week") != week or not self.budget.take():
+            return
+        lines = [f"{s}: {p['summary']} Frames {p['frames']}. Scenarios: " + " | ".join(x["text"] for x in p["scenarios"])
+                 for s, p in sorted(book["markets"].items())]
+        b = self.j.get("desk:brief") or {}
+        prompt = (f"Week {week}. TIIM's mechanical top-down plan for each market:\n" + "\n".join(lines) +
+                  f"\n\nLatest fundamental brief: {b.get('overview', 'none')}\n"
+                  "Scheduled high-impact events this week:\n" + ("\n".join(self._events(now, 24 * 6)) or "none") +
+                  "\n\nWrite the weekly briefing: a 3-4 sentence overview of the week, then for each market one "
+                  "sentence: what to focus on, and any event or risk that should make TIIM careful. Priority 1 = best "
+                  "opportunity this week, 3 = least. Do not change the plan's direction; comment on it.")
+        r = self.llm.ask("You are the head of a trading desk writing the weekly plan briefing. " + PHILOSOPHY,
+                         prompt, WEEKLY_SCHEMA, self.cfg.model_research)
+        if r.data is None:
+            log.warning("weekly briefing failed: %s", r.error)
+            return
+        book = self.j.get(f"plan:{self.s.mode}") or {}
+        if book.get("week") != week:
+            return
+        book["briefing"] = str(r.data.get("overview", ""))[:900]
+        book["notes"] = {m["symbol"]: f"(priority {m.get('priority', 2)}) {str(m.get('comment', ''))[:300]}"
+                         for m in r.data.get("markets", []) if m.get("symbol") in book["markets"]}
+        self.j.set(f"plan:{self.s.mode}", book)
+        self.j.event("plan", f"Weekly briefing {week}: {book['briefing'][:160]}")
+
     # --- debate + judge --------------------------------------------------------------------
     def submit(self, sig, ctx, dec: dict) -> bool:
         """Queue a setup for the desk. False when the desk can't take it (TIIM then decides alone)."""
@@ -271,7 +314,8 @@ class Desk:
     def review(self, sig, ctx, dec: dict) -> Verdict:
         now = pd.Timestamp(ctx.time)
         brief = self.brief_for(sig.symbol, pd.Timestamp.now(tz="UTC")) or {}
-        text = dossier(sig, ctx, dec, brief, self._events(now, 6, sig.symbol))
+        plan = ((self.j.get(f"plan:{self.s.mode}") or {}).get("markets") or {}).get(sig.symbol)
+        text = dossier(sig, ctx, dec, brief, self._events(now, 6, sig.symbol), plan)
         calls0 = self.budget.used
         adv = "You are an advocate on a trading desk. " + PHILOSOPHY + " Argue your side as strongly as the evidence " \
               "honestly allows, in at most 80 words. Conviction 0-10: 0 = your side has no real case, 10 = overwhelming."

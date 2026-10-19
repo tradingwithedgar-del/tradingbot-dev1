@@ -15,7 +15,9 @@ from __future__ import annotations
 from ..analysis.context import MarketContext
 from .base import Param, Signal, Strategy
 
-MAX_BARS_SINCE = {"1H": 12, "4H": 6}   # how recent the break must be on each timeframe
+from ..analysis.patterns import PATTERN_TYPES, TITLES
+
+MAX_BARS_SINCE = {"1H": 12, "4H": 6, "1D": 3}   # how recent the break must be on each timeframe
 
 
 class BreakRetest(Strategy):
@@ -38,13 +40,17 @@ class BreakRetest(Strategy):
             "min_wick_ratio": Param(0.4, 0.2, 0.7),
         }
 
+    frames = ("1H", "4H")
+    break_types = {"bos", "level"}
+
     def _latest_break(self, ctx: MarketContext) -> tuple[str, dict, object] | None:
         best = None
-        for tf in ("1H", "4H"):
+        for tf in self.frames:
             f = ctx.htf.get(tf)
-            if not f or not f.breaks:
+            mine = [b for b in (f.breaks if f else []) if b["type"] in self.break_types]
+            if not mine:
                 continue
-            b = f.breaks[-1]
+            b = mine[-1]
             if b["bars_ago"] > MAX_BARS_SINCE[tf]:
                 continue
             if best is None or b["time"] > best[1]["time"]:
@@ -100,6 +106,10 @@ class BreakRetest(Strategy):
         stop = pb_extreme + buf if side == "sell" else pb_extreme - buf
         if abs(close - stop) < 0.6 * a:                       # never a stop tighter than the compliance floor
             stop = close + 0.6 * a if side == "sell" else close - 0.6 * a
+        return self._make(ctx, side, stop, tf, brk, level, dist)
+
+    def _make(self, ctx, side, stop, tf, brk, level, dist) -> Signal | None:
+        d = brk["dir"]
         what = ("break of structure (lower high, then close below the higher low)" if brk["type"] == "bos" and d < 0 else
                 "break of structure (higher low, then close above the lower high)" if brk["type"] == "bos" else
                 f"{'support' if d < 0 else 'resistance'} that held {brk.get('touches', 2)} times broke")
@@ -109,3 +119,34 @@ class BreakRetest(Strategy):
             break_tf=tf, break_type=brk["type"], break_level=level, break_bars_ago=brk["bars_ago"],
             break_dist_atr=round(dist, 2),
         )
+
+
+class ChartPattern(BreakRetest):
+    """Classic chart patterns on the Daily / 4H / 1H chart, entered on the 15m retest of the breakout."""
+
+    name = "chart_pattern"
+    title = "Chart patterns (H&S, double/triple tops, triangles, wedges, flags, cups...)"
+    description = ("Daily, 4H or 1H: head & shoulders, double/triple top or bottom, triangles, wedges, channels, "
+                   "flags, pennants, rounding bottom, cup & handle, bump & run. After the breakout, waits for the "
+                   "15m pullback toward the breakout line and a rejection candle. Target = the pattern's measured "
+                   "move; stop beyond the pullback. TIIM learns which patterns work on which market.")
+    author = "TIIM (from your pattern sheet)"
+    frames = ("1D", "4H", "1H")
+    break_types = PATTERN_TYPES
+    MIN_RR, MAX_RR = 1.5, 4.0
+
+    def _make(self, ctx, side, stop, tf, brk, level, dist) -> Signal | None:
+        risk = abs(ctx.close - stop) or 1e-12
+        rr = abs(brk["target"] - ctx.close) / risk
+        if (brk["target"] - ctx.close) * brk["dir"] <= 0 or rr < self.MIN_RR:
+            return None                               # the measured move doesn't leave enough room
+        sig = self._signal(
+            ctx, side, stop,
+            f"{tf} {TITLES[brk['type']].lower()} broke at {level:.5g} {brk['bars_ago']} candle(s) ago "
+            f"(measured target {brk['target']:.5g}); 15m pullback rejected",
+            pattern=brk["type"], break_tf=tf, break_type=brk["type"], break_level=level,
+            break_bars_ago=brk["bars_ago"], break_dist_atr=round(dist, 2), pattern_target=brk["target"],
+        )
+        if sig is not None:
+            sig.reward_multiple = round(min(self.MAX_RR, rr), 2)
+        return sig

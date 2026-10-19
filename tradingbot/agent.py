@@ -10,6 +10,7 @@ import pandas as pd
 
 from . import postmortem as pm
 from .analysis.context import MarketContext
+from . import plan as weekly
 from .analysis import htf
 from .analysis.view import chart_view
 from .broker.base import TIMEFRAME_SECONDS, Broker
@@ -132,6 +133,7 @@ class Agent:
         self._flatten_for_session(now_ts)
         self._sync_closed_positions()
         self._merge_lab()
+        self._ensure_plans(now_ts)
         if self.desk:
             self._desk_results()
         equity, balance = self.broker.equity(), self.broker.balance()
@@ -163,6 +165,7 @@ class Agent:
                 quote, spread = None, 0.0
             ctx = MarketContext(symbol, df, spread=spread, news=self._news_state(symbol, now_ts),
                                 earnings=self._earnings_state(symbol, now_ts), htf=self._htf_frames(symbol, df))
+            self._check_plan(symbol, ctx, now_ts)
             c = df["close"]
             self._snap[symbol] = {"price": float(c.iloc[-1]), "trend": ctx.trend,
                                   "chg_1d": float(c.iloc[-1] / c.iloc[-min(len(c), 96)] * 100 - 100),
@@ -229,6 +232,67 @@ class Agent:
                     v["zones"].append({"kind": z["kind"], "top": z["top"], "bottom": z["bottom"], "from": v["t"][0],
                                        "fresh": z["fresh"], "touches": 0, "tf": htf.SHORT[tf]})
         return v
+
+    # --- weekly plan ----------------------------------------------------------------------
+    @property
+    def _plan_key(self) -> str:
+        return f"plan:{self.j.mode}"
+
+    def _book(self, now: pd.Timestamp) -> dict:
+        wk = weekly.week_key(now)
+        book = self.j.get(self._plan_key) or {}
+        if book.get("week") != wk:
+            if book.get("week"):
+                self.j.set(f"plan_prev:{self.j.mode}", book)
+            book = {"week": wk, "created": now.isoformat(), "markets": {}, "briefing": "", "notes": {}}
+        return book
+
+    def plan_for(self, symbol: str) -> dict | None:
+        return ((self.j.get(self._plan_key) or {}).get("markets") or {}).get(symbol)
+
+    def _ensure_plans(self, now: pd.Timestamp) -> None:
+        """Plan every market for the week (from Sunday 18:00 UTC), even ones whose market is still closed."""
+        book = self._book(now)
+        missing = [s for s in self.s.symbols if s not in book["markets"]]
+        if not missing and book.get("week") == (self.j.get(self._plan_key) or {}).get("week"):
+            self._maybe_brief(book, now)
+            return
+        for sym in missing:
+            try:
+                df = self.broker.get_bars(sym, self.s.timeframe, self.s.history_bars)
+                if len(df) < 60:
+                    continue
+                frames = self._htf_frames(sym, df)
+                if not frames:
+                    continue
+                book["markets"][sym] = weekly.market_plan(sym, frames, float(df["close"].iloc[-1]), now)
+                self.j.event("plan", f"{book['week']} plan {sym}: {book['markets'][sym]['summary']}", ts=self.now())
+            except Exception as e:  # pragma: no cover - network
+                log.warning("weekly plan for %s failed: %s", sym, e)
+        self.j.set(self._plan_key, book)
+        self._maybe_brief(book, now)
+
+    def _check_plan(self, symbol: str, ctx: MarketContext, now: pd.Timestamp) -> None:
+        """A daily close beyond the plan's invalidation level means the plan was wrong: re-plan that market."""
+        book = self.j.get(self._plan_key) or {}
+        p = (book.get("markets") or {}).get(symbol)
+        day = ctx.htf.get("1D")
+        if not p or not day or not weekly.invalidated(p, day.close):
+            return
+        old = dict(p, status="invalidated")
+        book.setdefault("history", []).append(old)
+        book["markets"][symbol] = dict(weekly.market_plan(symbol, ctx.htf, ctx.close, now),
+                                       replanned_from=old["summary"])
+        self.j.set(self._plan_key, book)
+        self.j.event("plan", f"{symbol}: daily close beyond {old['invalidation']:.5g} proved the weekly plan wrong "
+                             f"- re-planned: {book['markets'][symbol]['summary']}", ts=self.now())
+
+    def _maybe_brief(self, book: dict, now: pd.Timestamp) -> None:
+        if (self.desk and not book.get("briefing") and not book.get("briefing_asked")
+                and len(book["markets"]) >= len(self.s.symbols) and self.desk.available):
+            book["briefing_asked"] = True
+            self.j.set(self._plan_key, book)
+            self.desk.weekly_briefing(book["week"], now)
 
     # --- news handling -------------------------------------------------------------------
     def _flatten_for_news(self, now: pd.Timestamp) -> None:
@@ -541,6 +605,9 @@ class Agent:
             sig.features["news_agree"] = "none" if not nd else ("with" if (nd > 0) == (sig.side == "buy") else "against")
             sig.features.update(htf.features(ctx.htf, sig.side, float(ctx.bar["low"]), float(ctx.bar["high"]),
                                              sig.entry, sig.stop))
+            wp = self.plan_for(ctx.symbol)
+            sig.features["plan_agree"] = ("none" if not wp else "both" if wp["direction"] == "both"
+                                          else "with" if wp["direction"] == sig.side else "against")
             brief = self.desk.brief_for(ctx.symbol) if self.desk else None
             bias = (brief or {}).get("bias", "neutral")
             sig.features["brief_agree"] = "none" if bias == "neutral" else (
@@ -554,7 +621,8 @@ class Agent:
 
         for sig in signals:
             strat = by_name.get(sig.strategy) or next(st for st in (only or []) if st.name == sig.strategy)
-            decision = self.learner.decide(strat, sig.features, ctx.symbol, self.s.live_approved_strategies)
+            decision = self.learner.decide(strat, sig.features, ctx.symbol, self.s.live_approved_strategies,
+                                           rr=sig.reward_multiple)
             why = list(decision.reasons)
             action = decision.action
             if action == "skip":
@@ -594,6 +662,10 @@ class Agent:
         if gap:
             return gap
         f = sig.features
+        if self.s.plan_filter:
+            why = weekly.against(self.plan_for(sig.symbol), sig.side, f)
+            if why:
+                return why
         if self.s.extension_filter and f.get("extended") == "exhausted":
             return (f"chasing an exhausted move ({htf.extension_text(f, sig.side)}) - a pullback against the "
                     f"trade is likely before the target; waiting for a better entry")

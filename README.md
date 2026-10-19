@@ -112,6 +112,13 @@ Every time a bar closes, for each symbol the agent:
 * **Top-down analysis.** Monthly, Weekly, Daily and 4H structure (HH/HL vs LH/LL) and zones decide the
   direction; the 15m chart only times the entry. A 15m setup against that bias isn't traded for real unless price
   is at a higher-timeframe zone (a real reversal spot). `HTF_FILTER=0` turns the filter off.
+* **Chart patterns.** Head & shoulders (and inverse), double/triple tops and bottoms, ascending/descending/
+  symmetrical triangles, rising/falling wedges, channels, flags, pennants, rounding bottoms, cup & handle and
+  bump & run are recognised on the Daily, 4H and 1H charts. The `chart_pattern` strategy trades the 15m retest
+  after a breakout, aiming for the pattern's measured move; TIIM learns which patterns work on which market.
+* **Weekly plan.** Every Sunday 18:00 UTC TIIM reads each market top-down, marks key zones and forming patterns,
+  and writes the week's plan (`tiim plan`, dashboard "Weekly plan"). Real trades follow the planned direction;
+  a daily close beyond the plan's invalidation level re-plans that market. `PLAN_FILTER=0` turns the gate off.
 * **Trading desk.** Before a setup becomes a real trade, Claude agents research the fundamentals, argue the
   bull and bear case, and TIIM's judge takes it, halves it or skips it. A nightly Strategy Lab backtests new
   strategy ideas and adds those that win 70%+ of the time. See [DESK.md](DESK.md).

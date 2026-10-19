@@ -173,6 +173,8 @@ class Settings:
     htf_filter: bool = field(default_factory=lambda: os.getenv("HTF_FILTER", "1") not in {"0", "false", "no", "NO"})
     # Don't chase: no real trade in the direction of a move that is already exhausted (long 4H streak, far
     # from the 4H average, big day, extreme RSI). EXTENSION_FILTER=0 turns it off.
+    # Weekly plan: real trades only in the direction planned for the week (PLAN_FILTER=0 turns it off).
+    plan_filter: bool = field(default_factory=lambda: os.getenv("PLAN_FILTER", "1") not in {"0", "false", "no", "NO"})
     extension_filter: bool = field(default_factory=lambda: os.getenv("EXTENSION_FILTER", "1") not in {"0", "false", "no", "NO"})
     history_bars: int = 400
     poll_seconds: int = 20

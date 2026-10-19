@@ -125,7 +125,7 @@ def test_break_retest_sells_the_first_pullback_after_a_support_break():
     df["high"] = df[["open", "close"]].max(axis=1) + 0.05
     df["low"] = df[["open", "close"]].min(axis=1) - 0.05
     df["volume"] = 1.0
-    brk = [b for b in frame.breaks if b["dir"] == -1][-1]
+    brk = [b for b in frame.breaks if b["dir"] == -1 and b["type"] in ("bos", "level")][-1]
     frame.breaks = [dict(brk, bars_ago=2)]                     # the break happened 2 hours ago
     ctx = MarketContext("US30", df, htf={"1H": frame})
     sig = BreakRetest().generate(ctx)
@@ -135,3 +135,12 @@ def test_break_retest_sells_the_first_pullback_after_a_support_break():
     assert "1H" in sig.reason and sig.features["break_tf"] == "1H"
     frame.breaks = [dict(brk, bars_ago=30)]                    # break too long ago: too late, no trade
     assert BreakRetest().generate(MarketContext("US30", df, htf={"1H": frame})) is None
+
+
+def test_backtest_makes_a_weekly_plan_and_keeps_to_it(tmp_path):
+    j = run_backtest({"A": synthetic(1500, 1.10, seed=8)}, Settings(), db_path=tmp_path / "p.db", seed=1)
+    book = j.get("plan:backtest")
+    assert book and "A" in book["markets"] and book["markets"]["A"]["summary"]
+    assert any(e["kind"] == "plan" for e in j.events(500, "backtest"))
+    for t in j.trades("mode='backtest' AND shadow=0"):
+        assert t["features"].get("plan_agree") in ("with", "both", "none", "against")

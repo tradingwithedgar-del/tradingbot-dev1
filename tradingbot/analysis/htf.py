@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from . import patterns as pat
 from .indicators import atr as atr_fn
 from .indicators import ema, rsi
 from .structure import find_swings, structure_sequence, trend_state
@@ -30,6 +31,7 @@ FRAMES = ("1M", "1W", "1D", "4H")
 NAMES = {"1M": "Monthly", "1W": "Weekly", "1D": "Daily", "4H": "4H", "1H": "1H"}
 SHORT = {"1M": "M", "1W": "W", "1D": "D", "4H": "4H", "1H": "1H"}
 PATTERN_FRAMES = ("4H", "1H")   # where breaks of structure / support breaks are looked for (1H isn't in the bias)
+CHART_PATTERN_FRAMES = ("1D", "4H", "1H")   # where classic chart patterns are looked for
 WEIGHTS = {"1M": 1, "1W": 2, "1D": 3, "4H": 2}
 BIAS_THRESHOLD = 3          # weighted score needed for a clear bull/bear bias (max is 8)
 
@@ -47,7 +49,10 @@ class Frame:
     streak: int = 0                 # consecutive candles of one colour at the end: +5 = five green, -7 = seven red
     stretch_atr: float = 0.0        # (close - EMA20) / ATR: how far price has run from its average
     rsi: float = 50.0
-    breaks: list = field(default_factory=list)  # recent structure / level breaks, newest last (see find_breaks)
+    breaks: list = field(default_factory=list)  # recent structure / level / chart-pattern breaks, newest last
+    forming: list = field(default_factory=list)  # chart patterns not broken yet (breakout line known)
+    last_high: float | None = None               # latest confirmed swing high / low on this timeframe
+    last_low: float | None = None
 
     @property
     def direction(self) -> int:
@@ -56,7 +61,8 @@ class Frame:
     def to_dict(self) -> dict:
         return {"tf": self.tf, "name": NAMES[self.tf], "trend": self.trend, "sequence": self.sequence,
                 "ema_side": self.ema_side, "zones": self.zones, "bars": self.bars, "streak": self.streak,
-                "stretch_atr": round(self.stretch_atr, 2), "rsi": round(self.rsi, 1), "breaks": self.breaks}
+                "stretch_atr": round(self.stretch_atr, 2), "rsi": round(self.rsi, 1), "breaks": self.breaks,
+                "forming": self.forming[:4]}
 
 
 def resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
@@ -92,8 +98,15 @@ def analyze_frame(tf: str, df: pd.DataFrame, max_zones: int = 4) -> Frame:
         streak += sign
     r = float(rsi(df["close"], 14).iloc[-1])
     breaks = find_breaks(df, swings, a) if tf in PATTERN_FRAMES else []
+    forming: list = []
+    if tf in CHART_PATTERN_FRAMES:
+        pb, forming = pat.detect(df, swings, a, lookback=30)
+        breaks = sorted(breaks + pb, key=lambda b: -b["bars_ago"])
+    hs = [s.price for s in swings if s.kind == "H"]
+    ls = [s.price for s in swings if s.kind == "L"]
     return Frame(tf, trend_state(swings, close), structure_sequence(swings, 4), "above" if close > e else "below",
-                 zones, n, close, a, streak, (close - e) / a, r if r == r else 50.0, breaks)
+                 zones, n, close, a, streak, (close - e) / a, r if r == r else 50.0, breaks, forming,
+                 hs[-1] if hs else None, ls[-1] if ls else None)
 
 
 def find_breaks(df: pd.DataFrame, swings, atr: float, lookback: int = 30, level_tol_atr: float = 0.35,

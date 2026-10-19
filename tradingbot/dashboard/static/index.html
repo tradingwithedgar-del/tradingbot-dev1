@@ -136,6 +136,12 @@ h3.mini { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; col
     </div>
   </section>
 
+  <section class="card" id="planCard">
+    <div><h2>Weekly plan</h2><p class="sub" id="planSub">Made before the week opens (Sunday 18:00 UTC) from the Monthly, Weekly, Daily and 4H charts. Real trades only in the planned direction, unless price reacts at a higher-timeframe zone or a Daily/4H pattern breaks the other way. A daily close beyond the invalidation level re-plans that market.</p></div>
+    <p id="planBrief"></p>
+    <div class="table-wrap"><table id="planTable"></table></div>
+  </section>
+
   <section class="card" id="deskCard">
     <div class="controls" style="justify-content:space-between"><div><h2>Trading desk</h2><p class="sub" id="deskSub">Research brief, the bull/bear debate on each setup, the judge's call, and how each agent is scoring</p></div></div>
     <div class="desk-grid">
@@ -257,6 +263,25 @@ async function refresh() {
   if (CHART_TAB === 'tiim') refreshView(); else loadTradingView(false);
   get('/api/news').then(renderNews).catch(() => {});
   get(`/api/desk?mode=${m}`).then(renderDesk).catch(() => {});
+  get(`/api/plan?mode=${m}`).then(renderPlan).catch(() => {});
+}
+
+function renderPlan(book) {
+  const mk = book.markets || {};
+  if (!Object.keys(mk).length) { $('planTable').innerHTML = '<tr><td class="empty">No plan yet. TIIM writes it within a minute of starting, and every Sunday 18:00 UTC.</td></tr>'; $('planBrief').textContent = ''; return; }
+  $('planBrief').innerHTML = `<b>${esc(book.week)}</b> · made ${esc((book.created || '').slice(0, 16).replace('T', ' '))} UTC` +
+    (book.briefing ? `<br>${esc(book.briefing)}` : '');
+  const fmt = (z) => z.map(x => `${esc(x.tf)} ${(+x.bottom).toPrecision(6)}–${(+x.top).toPrecision(6)}`).join(', ') || '—';
+  $('planTable').innerHTML = `<thead><tr><th>Market</th><th>Plan</th><th>M / W / D / 4H</th><th>Resistance</th><th>Support</th><th>Setups it waits for</th></tr></thead><tbody>` +
+    Object.values(mk).sort((a, b) => a.symbol.localeCompare(b.symbol)).map(p => {
+      const dir = p.direction === 'buy' ? '▲ buy' : p.direction === 'sell' ? '▼ sell' : '◆ both';
+      const fr = p.frames || {};
+      return `<tr><td><b>${esc(p.symbol)}</b>${p.status !== 'active' ? ` <span class="tag">${esc(p.status)}</span>` : ''}</td>
+        <td style="white-space:normal">${dir}<div class="muted">${esc(p.summary)}</div>${(book.notes || {})[p.symbol] ? `<div class="muted">Desk: ${esc(book.notes[p.symbol])}</div>` : ''}</td>
+        <td>${['M', 'W', 'D', '4H'].map(k => esc((fr[k] || '—').replace('_', ' '))).join(' / ')}</td>
+        <td>${fmt(p.resistance || [])}</td><td>${fmt(p.support || [])}</td>
+        <td style="white-space:normal">${(p.scenarios || []).map(s => `<div>• ${esc(s.text)}</div>`).join('') || '<span class="muted">nothing clean: waits</span>'}</td></tr>`;
+    }).join('') + '</tbody>';
 }
 
 function renderDesk(dk) {
@@ -377,6 +402,12 @@ async function refreshView() {
     ? '<div><span>Top-down:</span> ' + h.frames.map(f => `${esc(f.name)} ${arrow(f.trend)} ${esc(f.trend.replace('_', ' '))}`).join(' · ') +
       ` → <b>bias ${esc(h.bias)}</b> <span class="muted">(Monthly/Weekly/Daily/4H decide direction; 15m only times entries. Boxes labelled W/D/4H are higher-timeframe zones.)</span></div>`
     : '<div class="muted">Higher-timeframe read appears after TIIM processes the next candle.</div>';
+  const pats = [];
+  for (const f of (h.frames || [])) {
+    for (const b of (f.breaks || [])) if (b.title) pats.push(`${esc(f.name)} ${esc(b.title.toLowerCase())} <b>broke</b> ${b.bars_ago} candle(s) ago at ${(+b.level).toPrecision(6)} → target ${(+b.target).toPrecision(6)}`);
+    for (const p of (f.forming || [])) pats.push(`${esc(f.name)} ${esc(p.title.toLowerCase())} forming: ${p.dir > 0 ? 'above' : 'below'} ${(+p.trigger).toPrecision(6)} triggers it`);
+  }
+  if (pats.length) $('htfStrip').innerHTML += `<div><span>Patterns:</span> ${pats.slice(0, 6).join(' · ')}</div>`;
   const trades = v.trades.filter(t => !t.shadow || $('showVirtual').checked);
   const key = [sym, v.updated, trades.map(t => t.id + t.status).join(','), $('showSwings').checked, $('showZones').checked,
     document.documentElement.dataset.theme || ''].join('|');

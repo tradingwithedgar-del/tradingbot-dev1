@@ -11,6 +11,7 @@ from .learning import CANDIDATE
 
 # How a shadow decision's last reason maps to a human explanation.
 REASON_GROUPS = [
+    ("against this week's plan", "against the weekly plan for that market"),
     ("chasing an exhausted move", "the move was already stretched (long 4H streak / far from average) - didn't chase"),
     ("against the higher timeframes", "the 15m setup pointed against the Monthly/Weekly/Daily/4H trend (top-down filter)"),
     ("desk veto", "the trading desk vetoed it (still followed virtually to grade the veto)"),

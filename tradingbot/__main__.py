@@ -11,6 +11,7 @@
     python -m tiim desk                # the trading desk: latest brief, debates and report cards
     python -m tiim lab                 # run the Strategy Lab now (it also runs nightly)
     python -m tiim claude              # check that TIIM can reach Claude
+    python -m tiim plan [--rebuild]    # this week's plan for every market
     python -m tiim status
     python -m tiim stop | resume
 """
@@ -260,6 +261,19 @@ def cmd_desk(args) -> None:
     print(summary(j.get("lab:report") or {}))
 
 
+def cmd_plan(args) -> None:
+    from .journal import Journal
+    from .plan import text
+
+    s = Settings()
+    j = Journal(args.db or s.db_path, mode=s.mode)
+    if args.rebuild:
+        j.set(f"plan:{s.mode}", None)
+        print("Weekly plan cleared: TIIM writes a new one on its next cycle (within a minute).")
+        return
+    print(text(j.get(f"plan:{s.mode}") or {}))
+
+
 def cmd_claude(args) -> None:
     """Check TIIM's Claude access with one tiny call."""
     import os
@@ -353,6 +367,10 @@ def main() -> None:
     dk = sub.add_parser("desk", help="the trading desk: research brief, recent debates, report cards, Strategy Lab")
     dk.add_argument("--db", default=None)
     dk.set_defaults(fn=cmd_desk)
+    pl = sub.add_parser("plan", help="this week's plan for every market")
+    pl.add_argument("--rebuild", action="store_true", help="throw the plan away and make a new one now")
+    pl.add_argument("--db", default=None)
+    pl.set_defaults(fn=cmd_plan)
     sub.add_parser("claude", help="check that TIIM can reach Claude (one tiny call)").set_defaults(fn=cmd_claude)
     sub.add_parser("lab", help="run the Strategy Lab now (it also runs nightly)").set_defaults(fn=cmd_lab)
     sub.add_parser("stop").set_defaults(fn=cmd_stop)

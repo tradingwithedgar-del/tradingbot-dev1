@@ -29,7 +29,8 @@ def test_targets_are_3r(tmp_path):
     j = run_backtest(data, Settings(), db_path=tmp_path / "bt.db", seed=4)
     # Target is 3R from the signal price: |TP - SL| == 4R. Shadow entries are shifted by half the
     # spread (realistic cost), so compare the planned R with the recorded entry within that spread.
-    trades = [t for t in j.trades("mode='backtest' AND shadow=1") if not t["features"].get("max_bars")]  # scalps differ
+    trades = [t for t in j.trades("mode='backtest' AND shadow=1")
+              if not t["features"].get("max_bars") and not t["features"].get("pattern")]  # scalps / patterns differ
     assert trades
     for t in trades:
         planned_r = abs(t["take_profit"] - t["stop"]) / 4
