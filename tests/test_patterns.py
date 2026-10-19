@@ -93,8 +93,8 @@ def test_weekly_plan_direction_invalidation_and_gate():
     assert p["direction"] == "buy" and p["status"] == "active" and p["invalidation"] < price
     assert plan.against(p, "sell", {}) and "plan" in plan.against(p, "sell", {})
     assert plan.against(p, "buy", {}) is None
-    assert plan.against(p, "sell", {"htf_reversal_spot": True}) is None          # reaction at a HTF zone
-    assert plan.against(p, "sell", {"pattern": "head_shoulders", "break_tf": "1D"}) is None
+    assert plan.against(p, "sell", {"htf_reversal_spot": True})                  # a zone alone is not a reversal
+    assert plan.against(p, "sell", {"htf_reversal": "Daily head & shoulders 1 candle(s) ago"}) is None
     assert plan.invalidated(p, p["invalidation"] - 1) and not plan.invalidated(p, price)
     # Sunday 18:00 UTC starts planning the coming week
     assert plan.week_key(pd.Timestamp("2026-10-18 17:59", tz="UTC")) != plan.week_key(pd.Timestamp("2026-10-18 18:00", tz="UTC"))

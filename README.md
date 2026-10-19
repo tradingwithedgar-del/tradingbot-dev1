@@ -110,8 +110,9 @@ Every time a bar closes, for each symbol the agent:
   * `immediately_wrong` (never got +0.3R) → stricter entry rules
   * `gave_back_profit` (was +1R, ended −1R) → move stop to break-even at +1.5R
 * **Top-down analysis.** Monthly, Weekly, Daily and 4H structure (HH/HL vs LH/LL) and zones decide the
-  direction; the 15m chart only times the entry. A 15m setup against that bias isn't traded for real unless price
-  is at a higher-timeframe zone (a real reversal spot). `HTF_FILTER=0` turns the filter off.
+  direction; the 15m chart only times the entry. TIIM only trades with the trend (higher-timeframe bias, or the 4H
+  structure when that is mixed). Against it only after a confirmed 4H/Daily reversal: a close through the last
+  swing, a break of structure or a chart-pattern breakout. A zone or reversal candle alone is not enough. `HTF_FILTER=0` turns the filter off.
 * **Chart patterns.** Head & shoulders (and inverse), double/triple tops and bottoms, ascending/descending/
   symmetrical triangles, rising/falling wedges, channels, flags, pennants, rounding bottoms, cup & handle and
   bump & run are recognised on the Daily, 4H and 1H charts. The `chart_pattern` strategy trades the 15m retest

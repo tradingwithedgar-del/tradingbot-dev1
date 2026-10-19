@@ -244,12 +244,44 @@ def extension_text(f: dict, side: str) -> str:
     return ", ".join(parts) or "not stretched"
 
 
+REVERSAL_BARS = {"1D": 5, "4H": 12}     # how recent a 4H/Daily break must be to count as a confirmed reversal
+
+
+def structure_dir(frames: dict[str, Frame]) -> int:
+    """The trend TIIM trades with: the higher-timeframe bias, or the 4H structure when the bias is mixed."""
+    b, _ = bias(frames)
+    if b in ("bull", "bear"):
+        return 1 if b == "bull" else -1
+    f = frames.get("4H")
+    return f.direction if f else 0
+
+
+def reversal(frames: dict[str, Frame], side: str) -> str | None:
+    """A CONFIRMED reversal toward `side` on the 4H or Daily chart, or None.
+    Confirmed = the structure itself broke that way: a close through the last swing (structure trend
+    `up_break`/`down_break`), a break of structure / support break, or a chart pattern breakout."""
+    d = 1 if side == "buy" else -1
+    for tf in ("1D", "4H"):
+        f = frames.get(tf)
+        if not f:
+            continue
+        if f.trend == ("up_break" if d > 0 else "down_break"):
+            return f"{NAMES[tf]} structure broke {'up' if d > 0 else 'down'} (close through the last swing {'high' if d > 0 else 'low'})"
+        for b in reversed(f.breaks):
+            if b["dir"] == d and b["bars_ago"] <= REVERSAL_BARS[tf]:
+                what = b.get("title", {"bos": "break of structure", "level": "level break"}.get(b["type"], b["type"]))
+                return f"{NAMES[tf]} {what.lower()} {b['bars_ago']} candle(s) ago"
+    return None
+
+
 def features(frames: dict[str, Frame], side: str, low: float, high: float, entry: float, stop: float) -> dict:
     if not frames:
         return {"htf_align": "unknown"}
     b, score = bias(frames)
-    want = "bull" if side == "buy" else "bear"
-    align = "unknown" if b == "unknown" else ("mixed" if b == "mixed" else ("with" if b == want else "against"))
+    sd = structure_dir(frames)
+    d = 1 if side == "buy" else -1
+    align = "unknown" if b == "unknown" else ("mixed" if sd == 0 else ("with" if sd == d else "against"))
+    rev = reversal(frames, side) if align == "against" else None
     at = zone_at(frames, low, high)
     feats = {f"htf_{SHORT[tf]}": f.trend for tf, f in frames.items() if tf in WEIGHTS}
     feats.update({
@@ -258,6 +290,8 @@ def features(frames: dict[str, Frame], side: str, low: float, high: float, entry
         # price reacting at a higher-timeframe zone that supports this direction = a real reversal spot
         "htf_reversal_spot": bool(at and at[1] == ("demand" if side == "buy" else "supply")),
         "htf_room_r": room_r(frames, side, entry, stop),
+        "htf_structure": {1: "up", -1: "down", 0: "range"}[sd],
+        "htf_reversal": rev or "",
     })
     feats.update(extension(frames, side, entry))
     d = 1 if side == "buy" else -1

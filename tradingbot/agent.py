@@ -675,10 +675,10 @@ class Agent:
         if self.s.extension_filter and f.get("extended") == "exhausted":
             return (f"chasing an exhausted move ({htf.extension_text(f, sig.side)}) - a pullback against the "
                     f"trade is likely before the target; waiting for a better entry")
-        if self.s.htf_filter and f.get("htf_align") == "against" and not f.get("htf_reversal_spot"):
+        if self.s.htf_filter and f.get("htf_align") == "against" and not f.get("htf_reversal"):
             frames = ", ".join(f"{k[4:]} {v}" for k, v in f.items() if k in ("htf_M", "htf_W", "htf_D", "htf_4H"))
-            return (f"against the higher timeframes ({frames}; bias {f.get('htf_bias')}) - a 15m "
-                    f"{sig.side} needs them on its side or price at a higher-timeframe {'demand' if sig.side == 'buy' else 'supply'} zone")
+            return (f"against the higher timeframes ({frames}; trend {f.get('htf_structure')}) - TIIM only trades with "
+                    f"the market structure until a 4H/Daily break confirms a reversal")
         if self.news:
             strat = next((st for st in self.core if st.name == sig.strategy.split(CANDIDATE)[0]), None)
             reason = self.news.blackout(sig.symbol, pd.Timestamp(self.now()),

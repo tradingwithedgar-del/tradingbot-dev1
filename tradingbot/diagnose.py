@@ -13,7 +13,7 @@ from .learning import CANDIDATE
 REASON_GROUPS = [
     ("against this week's plan", "against the weekly plan for that market"),
     ("chasing an exhausted move", "the move was already stretched (long 4H streak / far from average) - didn't chase"),
-    ("against the higher timeframes", "the 15m setup pointed against the Monthly/Weekly/Daily/4H trend (top-down filter)"),
+    ("against the higher timeframes", "against the higher-timeframe trend, no confirmed 4H/Daily reversal yet"),
     ("desk veto", "the trading desk vetoed it (still followed virtually to grade the veto)"),
     ("while the desk debated", "price moved while the desk debated"),
     ("desk is already debating", "the desk was busy with another setup on that market"),

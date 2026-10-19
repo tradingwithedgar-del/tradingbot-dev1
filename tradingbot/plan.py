@@ -6,8 +6,9 @@ the plan it will trade that week:
   scenarios   the concrete setups it is waiting for (pullback into a zone, a pattern breakout, ...)
   invalidation the daily level that proves the plan wrong; a daily close beyond it re-plans that market
 
-During the week TIIM only takes real trades in the planned direction, unless price reacts at a
-higher-timeframe zone or a Daily/4H chart pattern breaks the other way (both are reversal evidence).
+During the week TIIM only takes real trades in the planned direction, unless the 4H or Daily structure
+confirms a reversal (a close through the last swing, a break of structure or a chart-pattern breakout).
+Price merely touching a zone or a reversal candle is not enough.
 """
 from __future__ import annotations
 
@@ -90,10 +91,8 @@ def against(p: dict | None, side: str, features: dict) -> str | None:
     """Why a real trade on this side breaks the weekly plan, or None."""
     if not p or p.get("status") != "active" or p.get("direction") not in ("buy", "sell") or side == p["direction"]:
         return None
-    if features.get("htf_reversal_spot"):
-        return None                                  # reacting at a higher-timeframe zone: reversal evidence
-    if features.get("pattern") and features.get("break_tf") in ("1D", "4H"):
-        return None                                  # a Daily/4H chart pattern broke the other way
+    if features.get("htf_reversal"):
+        return None          # the 4H/Daily structure broke the other way: a confirmed reversal, not a guess
     return f"against this week's plan for {p['symbol']} ({p['summary']})"
 
 

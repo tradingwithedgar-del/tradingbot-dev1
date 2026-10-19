@@ -41,17 +41,17 @@ def test_sell_against_uptrend_is_blocked_unless_at_htf_supply():
     j = Journal(Path(tempfile.mkdtemp()) / "b.db", mode="backtest")
     agent = Agent(s, SimBroker(data, warmup=300), j)
     sig = Signal("BTCUSD", "structure_trend", "sell", 100.0, 100.5, 98.5, features={
-        "htf_align": "against", "htf_reversal_spot": False, "htf_M": "up", "htf_W": "up", "htf_D": "up", "htf_4H": "up",
+        "htf_align": "against", "htf_reversal": "", "htf_M": "up", "htf_W": "up", "htf_D": "up", "htf_4H": "up",
         "htf_bias": "bull"})
     q = agent.broker.get_quote("BTCUSD")
     ctx = type("C", (), {"close": 100.0, "atr_now": 1.0})()
     why = agent._entry_blocker(sig, ctx, q, [], set())
     assert why and "against the higher timeframes" in why and "D up" in why
-    sig.features["htf_reversal_spot"] = True          # sell at a Daily/Weekly supply zone: allowed through this rule
+    sig.features["htf_reversal"] = "Daily break of structure 2 candle(s) ago"   # confirmed reversal: allowed
     why = agent._entry_blocker(sig, ctx, q, [], set())
     assert not why or "against the higher timeframes" not in why
     s.htf_filter = False
-    sig.features["htf_reversal_spot"] = False
+    sig.features["htf_reversal"] = ""
     why = agent._entry_blocker(sig, ctx, q, [], set())
     assert not why or "against the higher timeframes" not in why
 
@@ -67,7 +67,7 @@ def test_backtest_records_top_down_features(tmp_path):
     for t in trades:
         f = t["features"]
         if not t["shadow"]:
-            assert not (f.get("htf_align") == "against" and not f.get("htf_reversal_spot"))
+            assert not (f.get("htf_align") == "against" and not f.get("htf_reversal"))
 
 
 def test_exhausted_move_is_not_chased():
@@ -144,3 +144,21 @@ def test_backtest_makes_a_weekly_plan_and_keeps_to_it(tmp_path):
     assert any(e["kind"] == "plan" for e in j.events(500, "backtest"))
     for t in j.trades("mode='backtest' AND shadow=0"):
         assert t["features"].get("plan_agree") in ("with", "both", "none", "against")
+
+
+def test_trend_rule_mixed_bias_follows_4h_and_reversal_needs_a_break():
+    up_d = zigzag(900, 0.5, "1D")
+    down_4h = zigzag(300, -0.2, "4h")
+    frames = htf.build(zigzag(900, 0.0, "1D"), down_4h)            # flat daily -> mixed, 4H decides
+    if htf.bias(frames)[0] == "mixed":
+        assert htf.structure_dir(frames) == -1
+        sell = htf.features(frames, "sell", 99, 101, 100, 101)
+        assert sell["htf_align"] == "with" and sell["htf_structure"] == "down"
+    frames = htf.build(up_d, zigzag(300, 0.2, "4h"))
+    sell = htf.features(frames, "sell", 99, 101, 100, 101)
+    assert sell["htf_align"] == "against" and not sell["htf_reversal"]
+    frames["4H"].breaks = [{"type": "bos", "dir": -1, "level": 100.0, "bars_ago": 2}]
+    sell = htf.features(frames, "sell", 99, 101, 100, 101)
+    assert "4H break of structure" in sell["htf_reversal"]
+    frames["4H"].breaks = [{"type": "bos", "dir": -1, "level": 100.0, "bars_ago": 30}]   # too old
+    assert not htf.features(frames, "sell", 99, 101, 100, 101)["htf_reversal"]
