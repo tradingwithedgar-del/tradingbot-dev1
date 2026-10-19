@@ -129,6 +129,8 @@ def dossier(sig, ctx, dec: dict, brief: dict | None, events: list[str], plan: di
         f"Top-down read: {htf.describe(ctx.htf)}. Higher-timeframe zone at price: {f.get('htf_zone', 'none')}; "
         f"nearest higher-timeframe zone in the trade's way: "
         + (f"{f['htf_room_r']}R away" if f.get("htf_room_r") is not None else "none") + ".",
+        f"Reversal candlestick patterns: 15m {'with the trade: ' + f.get('candle', 'none') if f.get('candle_agree') == 'with' else 'against the trade' if f.get('candle_agree') == 'against' else 'none'}; "
+        f"higher timeframe: {f.get('htf_candle', 'none')} ({f.get('htf_candle_agree', '-')} the trade).",
         f"This week's plan for {sig.symbol}: {(plan or {}).get('summary', 'none')}",
         f"How stretched the move already is in the trade's direction: {f.get('extended', 'unknown')} "
         f"({htf.extension_text(f, sig.side)}).",

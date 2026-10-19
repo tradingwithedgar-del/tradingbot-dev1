@@ -120,6 +120,14 @@
     // markers: swings + trades
     const markers = [];
     if (opts.swings !== false) {
+      // reversal candlestick patterns (medium/strong only, to keep the chart readable)
+      for (const p of view.candles || []) {
+        if (p.strength < 2) continue;
+        const t = ts(p.t);
+        if (t < tMin || t > tMax) continue;
+        markers.push({ time: snap(t), position: p.dir > 0 ? 'belowBar' : 'aboveBar', shape: p.dir > 0 ? 'arrowUp' : 'arrowDown',
+          size: 0.4, color: alpha(p.dir > 0 ? C.up : C.down, 0.7), text: p.title });
+      }
       for (const s of view.swings || []) {
         if (!s.label) continue;
         const t = ts(s.t);

@@ -116,6 +116,11 @@ Every time a bar closes, for each symbol the agent:
   symmetrical triangles, rising/falling wedges, channels, flags, pennants, rounding bottoms, cup & handle and
   bump & run are recognised on the Daily, 4H and 1H charts. The `chart_pattern` strategy trades the 15m retest
   after a breakout, aiming for the pattern's measured move; TIIM learns which patterns work on which market.
+* **50 reversal candlestick patterns** (your Alchemy Markets list): hammer, engulfing, morning/evening star, pin
+  bars, tweezers, harami, kicker, three soldiers/crows and the rest, plus the chart patterns above. Checked on the
+  15m, 1H, 4H and Daily candles. The `candle_reversal` strategy trades them only at a higher-timeframe or fresh
+  zone after a move into it; weak patterns wait for a confirmation candle. Every trade records which pattern it
+  had, so TIIM learns which ones pay on which market. Strong patterns are drawn on the chart.
 * **Weekly plan.** Every Sunday 18:00 UTC TIIM reads each market top-down, marks key zones and forming patterns,
   and writes the week's plan (`tiim plan`, dashboard "Weekly plan"). Real trades follow the planned direction;
   a daily close beyond the plan's invalidation level re-plans that market. `PLAN_FILTER=0` turns the gate off.

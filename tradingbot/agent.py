@@ -12,6 +12,7 @@ from . import postmortem as pm
 from .analysis.context import MarketContext
 from . import plan as weekly
 from .analysis import htf
+from .analysis import candles as cdl
 from .analysis.view import chart_view
 from .broker.base import TIMEFRAME_SECONDS, Broker
 from .compliance import Compliance
@@ -221,6 +222,7 @@ class Agent:
 
     def _view_with_htf(self, ctx: MarketContext) -> dict:
         v = chart_view(ctx)
+        v["candles"] = cdl.scan(ctx.df, ctx.atr.to_numpy(), bars=len(v["t"]))
         b, score = htf.bias(ctx.htf)
         v["htf"] = {"bias": b, "score": score, "frames": [ctx.htf[tf].to_dict() for tf in htf.FRAMES if tf in ctx.htf]}
         lo, hi = min(v["low"][-200:] or [0]), max(v["high"][-200:] or [0])
@@ -605,6 +607,10 @@ class Agent:
             sig.features["news_agree"] = "none" if not nd else ("with" if (nd > 0) == (sig.side == "buy") else "against")
             sig.features.update(htf.features(ctx.htf, sig.side, float(ctx.bar["low"]), float(ctx.bar["high"]),
                                              sig.entry, sig.stop))
+            found = cdl.detect(ctx.df, ctx.atr.to_numpy(), lookback=2)
+            mine, other = cdl.best(found, sig.side), cdl.best(found, "sell" if sig.side == "buy" else "buy", 2)
+            sig.features["candle"] = mine["type"] if mine else "none"
+            sig.features["candle_agree"] = "with" if mine else ("against" if other else "none")
             wp = self.plan_for(ctx.symbol)
             sig.features["plan_agree"] = ("none" if not wp else "both" if wp["direction"] == "both"
                                           else "with" if wp["direction"] == sig.side else "against")

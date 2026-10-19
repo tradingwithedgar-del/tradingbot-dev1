@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from . import candles as cdl
 from . import patterns as pat
 from .indicators import atr as atr_fn
 from .indicators import ema, rsi
@@ -53,6 +54,7 @@ class Frame:
     forming: list = field(default_factory=list)  # chart patterns not broken yet (breakout line known)
     last_high: float | None = None               # latest confirmed swing high / low on this timeframe
     last_low: float | None = None
+    candles: list = field(default_factory=list)  # reversal candlestick patterns on the last 2 candles
 
     @property
     def direction(self) -> int:
@@ -62,7 +64,7 @@ class Frame:
         return {"tf": self.tf, "name": NAMES[self.tf], "trend": self.trend, "sequence": self.sequence,
                 "ema_side": self.ema_side, "zones": self.zones, "bars": self.bars, "streak": self.streak,
                 "stretch_atr": round(self.stretch_atr, 2), "rsi": round(self.rsi, 1), "breaks": self.breaks,
-                "forming": self.forming[:4]}
+                "forming": self.forming[:4], "candles": self.candles[:3]}
 
 
 def resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
@@ -106,7 +108,7 @@ def analyze_frame(tf: str, df: pd.DataFrame, max_zones: int = 4) -> Frame:
     ls = [s.price for s in swings if s.kind == "L"]
     return Frame(tf, trend_state(swings, close), structure_sequence(swings, 4), "above" if close > e else "below",
                  zones, n, close, a, streak, (close - e) / a, r if r == r else 50.0, breaks, forming,
-                 hs[-1] if hs else None, ls[-1] if ls else None)
+                 hs[-1] if hs else None, ls[-1] if ls else None, cdl.detect(df, atr_fn(df, 14).to_numpy(), lookback=2))
 
 
 def find_breaks(df: pd.DataFrame, swings, atr: float, lookback: int = 30, level_tol_atr: float = 0.35,
@@ -258,6 +260,14 @@ def features(frames: dict[str, Frame], side: str, low: float, high: float, entry
         "htf_room_r": room_r(frames, side, entry, stop),
     })
     feats.update(extension(frames, side, entry))
+    d = 1 if side == "buy" else -1
+    for tf in ("1D", "4H", "1H"):          # biggest timeframe with a fresh candle signal wins
+        f = frames.get(tf)
+        p = next((c for c in (f.candles if f else []) if c["strength"] >= 2), None)
+        if p:
+            feats["htf_candle"] = f"{SHORT[tf]} {p['type']}"
+            feats["htf_candle_agree"] = "with" if p["dir"] == d else "against"
+            break
     return feats
 
 

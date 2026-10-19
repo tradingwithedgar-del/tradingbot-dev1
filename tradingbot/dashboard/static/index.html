@@ -407,6 +407,8 @@ async function refreshView() {
     for (const b of (f.breaks || [])) if (b.title) pats.push(`${esc(f.name)} ${esc(b.title.toLowerCase())} <b>broke</b> ${b.bars_ago} candle(s) ago at ${(+b.level).toPrecision(6)} → target ${(+b.target).toPrecision(6)}`);
     for (const p of (f.forming || [])) pats.push(`${esc(f.name)} ${esc(p.title.toLowerCase())} forming: ${p.dir > 0 ? 'above' : 'below'} ${(+p.trigger).toPrecision(6)} triggers it`);
   }
+  for (const f of (h.frames || [])) for (const c of (f.candles || [])) if (c.strength >= 2)
+    pats.push(`${esc(f.name)} ${esc(c.title.toLowerCase())}${c.bars_ago ? ` (${c.bars_ago} candle ago${c.confirmed ? ', confirmed' : ''})` : ' (last candle)'}`);
   if (pats.length) $('htfStrip').innerHTML += `<div><span>Patterns:</span> ${pats.slice(0, 6).join(' · ')}</div>`;
   const trades = v.trades.filter(t => !t.shadow || $('showVirtual').checked);
   const key = [sym, v.updated, trades.map(t => t.id + t.status).join(','), $('showSwings').checked, $('showZones').checked,
