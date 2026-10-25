@@ -34,6 +34,7 @@ if os.getenv("ANTHROPIC_API_KEY", "").startswith("sk-ant-oat"):
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("BOT_DATA_DIR", ROOT / "data"))
 
+# BOT_SYMBOLS=ALL trades every instrument on the account (BOT_EXCLUDE removes names from that).
 # US indices, gold, NVIDIA, Apple, Tesla, WTI oil and crypto, named as on PlexyTrade's TradeLocker.
 # Full list of PlexyTrade names: SYMBOLS.md. `python -m tiim symbols` checks them.
 DEFAULT_SYMBOLS = "US30,US500,USTECH,XAUUSD,NVDA,AAPL,TSLA,XTIUSD,BTCUSD,ETHUSD,SOLUSD"
@@ -136,7 +137,8 @@ class DeskConfig:
     model_advocate: str = field(default_factory=lambda: os.getenv("DESK_MODEL_ADVOCATE", "sonnet"))
     model_judge: str = field(default_factory=lambda: os.getenv("DESK_MODEL_JUDGE", "opus"))
     # Claude Pro has usage limits: the desk never makes more than this many calls a day.
-    daily_calls: int = field(default_factory=lambda: _env_int("DESK_DAILY_CALLS", 60))
+    daily_calls: int = field(default_factory=lambda: _env_int("DESK_DAILY_CALLS", 150))
+    research_markets: int = field(default_factory=lambda: _env_int("DESK_RESEARCH_MARKETS", 40))  # biggest movers briefed
     rebuttal: bool = field(default_factory=lambda: os.getenv("DESK_REBUTTAL", "1") not in {"0", "false", "no", "NO"})
     research_every_minutes: int = field(default_factory=lambda: _env_int("DESK_RESEARCH_MINUTES", 120))
     max_price_drift_atr: float = 0.3     # setup is dropped if price ran away while the desk debated
@@ -159,6 +161,7 @@ class LabConfig:
     claude_ideas: int = field(default_factory=lambda: _env_int("LAB_CLAUDE_IDEAS", 6))
     spread_atr: float = 0.05              # trading cost charged on every backtest trade, in ATR
     max_active: int = 6                   # lab strategies trading at once (best first)
+    max_markets: int = field(default_factory=lambda: _env_int("LAB_MAX_MARKETS", 30))   # a rotating sample per night
 
 
 @dataclass
@@ -201,7 +204,7 @@ class Settings:
     tl_acc_num: int = field(default_factory=lambda: int(os.getenv("TL_ACC_NUM") or 0))
 
     # The demo account trades more at once so TIIM gets more samples to learn from.
-    DEMO_LIMITS = {"max_open_trades": 5, "max_total_open_risk": 0.20}
+    DEMO_LIMITS = {"max_open_trades": 20, "max_total_open_risk": 0.40, "max_same_group": 4}
 
     def __post_init__(self) -> None:
         if self.mode == "demo":
@@ -241,7 +244,9 @@ class Settings:
                 raise RuntimeError("BOT_MODE=live but TL_ENVIRONMENT points at the demo server.")
         if self.mode == "demo" and "live" in self.tl_environment:
             raise RuntimeError("BOT_MODE=demo but TL_ENVIRONMENT points at the live server.")
-        if not 1 <= self.risk.max_open_trades <= 10 or not 0 < self.risk.max_total_open_risk <= 0.30:
-            raise ValueError("MAX_OPEN_TRADES must be 1-10 and MAX_OPEN_RISK at most 30(%).")
+        max_trades, max_risk = (30, 0.60) if self.mode != "live" else (10, 0.30)
+        if not 1 <= self.risk.max_open_trades <= max_trades or not 0 < self.risk.max_total_open_risk <= max_risk:
+            raise ValueError(f"MAX_OPEN_TRADES must be 1-{max_trades} and MAX_OPEN_RISK at most {max_risk:.0%} "
+                             f"on the {self.mode} account.")
         if not 0 < self.risk.risk_per_trade <= 0.05:
             raise ValueError("risk_per_trade must be in (0, 5%].")

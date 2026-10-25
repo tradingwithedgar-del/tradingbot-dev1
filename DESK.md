@@ -42,7 +42,7 @@ live still needs your approval in `LIVE_APPROVED_STRATEGIES`.
 
 ## Claude usage (Pro plan)
 
-The desk never uses more than `DESK_DAILY_CALLS` (60) Claude calls a day: a research brief is 1 call, a debated setup is
+The desk never uses more than `DESK_DAILY_CALLS` (150) Claude calls a day: a research brief is 1 call, a debated setup is
 5 (3 when the budget runs low and the rebuttal is skipped). When the allowance is used up, or Claude is unreachable,
 TIIM decides alone exactly as before. The headline reader is separate (`NEWS_CLI_INTERVAL_SECONDS`).
 Only one `claude` process runs at a time on the server.

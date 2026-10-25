@@ -25,6 +25,16 @@ import time
 from .config import Settings
 
 
+def resolve_symbols(broker, s) -> None:
+    """BOT_SYMBOLS=ALL means every instrument on the account (minus BOT_EXCLUDE)."""
+    import os
+
+    if [x.upper() for x in s.symbols] == ["ALL"]:
+        skip = {x.strip() for x in os.getenv("BOT_EXCLUDE", "").split(",") if x.strip()}
+        s.symbols = [n for n in broker.instrument_names() if n not in skip]
+        logging.info("Trading every instrument on the account: %d markets", len(s.symbols))
+
+
 def _require_symbols(broker, symbols: list[str]) -> None:
     missing = broker.check_symbols(symbols)
     if missing:
@@ -128,6 +138,7 @@ def cmd_run(args) -> None:
     if s.mode == "backtest":
         raise SystemExit("Use `python -m tiim backtest` for backtests.")
     broker = TradeLockerBroker(s)
+    resolve_symbols(broker, s)
     _require_symbols(broker, s.symbols)
     journal = Journal(s.db_path, mode=s.mode)
     news = earnings = None
@@ -308,7 +319,9 @@ def cmd_lab(args) -> None:
     j = Journal(s.db_path, mode=s.mode)
     if not s.experiments_allowed:
         raise SystemExit("The Strategy Lab only feeds the demo account.")
-    report = run_nightly(s, j, TradeLockerBroker(s), llm=make_llm() if s.lab.claude_ideas else None)
+    broker = TradeLockerBroker(s)
+    resolve_symbols(broker, s)
+    report = run_nightly(s, j, broker, llm=make_llm() if s.lab.claude_ideas else None)
     print(summary(report))
 
 

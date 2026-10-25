@@ -62,15 +62,27 @@ def report(j: Journal, s: Settings, now: pd.Timestamp | None = None, hours: int 
         out.append("!! Paused: new trades are off (`tiim stop`). Run `tiim resume` to turn them back on.")
 
     last_bar = j.get(f"last_bar:{s.mode}", {}) or {}
-    out.append("Markets checked (last candle analysed):")
-    for sym in s.symbols:
+    symbols = sorted(last_bar) if [x.upper() for x in s.symbols] == ["ALL"] else list(s.symbols)
+    lines, live_n, closed_n, bad = [], 0, 0, []
+    for sym in symbols:
         t = last_bar.get(sym)
         if not t:
-            out.append(f"  {sym:<8} never - no price data yet (market closed or symbol problem)")
+            bad.append(f"  {sym:<8} never - no price data yet (market closed or symbol problem)")
             continue
         age = (now - pd.Timestamp(t)).total_seconds() / 3600
         flag = "" if age < 1 else ("  (market closed?)" if age < 72 else "  (NOT UPDATING - check `journalctl -u tiim`)")
-        out.append(f"  {sym:<8} {t[5:16].replace('T', ' ')} UTC, {age:.1f} h ago{flag}")
+        live_n += age < 1
+        closed_n += 1 <= age < 72
+        if len(symbols) <= 20 or age >= 72:
+            (bad if age >= 72 else lines).append(f"  {sym:<8} {t[5:16].replace('T', ' ')} UTC, {age:.1f} h ago{flag}")
+        elif age >= 72:
+            bad.append(f"  {sym:<8} not updating")
+    if len(symbols) > 20:
+        out.append(f"Markets checked: {len(symbols)} - {live_n} updating now, {closed_n} idle (market closed?), "
+                   f"{len(bad)} with no data or not updating")
+    else:
+        out.append("Markets checked (last candle analysed):")
+    out += lines + bad
 
     rows = j.trades("mode = ? AND opened_at >= ?", (s.mode, since))
     real = [t for t in rows if not t["shadow"]]

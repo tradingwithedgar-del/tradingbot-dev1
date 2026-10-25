@@ -252,7 +252,7 @@ def test_open_trade_limits_demo_live_and_env(monkeypatch):
 
     for k in ("MAX_OPEN_TRADES", "MAX_OPEN_RISK", "MAX_SAME_GROUP", "RISK_PER_TRADE"):
         monkeypatch.delenv(k, raising=False)
-    assert (Settings(mode="demo").risk.max_open_trades, Settings(mode="demo").risk.max_total_open_risk) == (5, 0.20)
+    assert (Settings(mode="demo").risk.max_open_trades, Settings(mode="demo").risk.max_total_open_risk) == (20, 0.40)
     assert (Settings(mode="live").risk.max_open_trades, Settings(mode="live").risk.max_total_open_risk) == (2, 0.10)
     monkeypatch.setenv("MAX_OPEN_TRADES", "4")
     monkeypatch.setenv("MAX_OPEN_RISK", "15")

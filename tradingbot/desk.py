@@ -16,6 +16,7 @@ Claude calls run on a single background worker so the trading loop never waits o
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -174,13 +175,15 @@ class Desk:
         self.background = background
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="desk") if background else None
         self.pending: dict[tuple, Pending] = {}
+        self._paused_until = pd.Timestamp(0, tz="UTC")
         self._research: Future | None = None
         self._lock = threading.Lock()
 
     # --- availability ----------------------------------------------------------------------
     @property
     def available(self) -> bool:
-        return self.cfg.enabled and self.llm is not None and self.budget.remaining >= CALLS_SHORT
+        return (self.cfg.enabled and self.llm is not None and self.budget.remaining >= CALLS_SHORT
+                and pd.Timestamp.now(tz="UTC") >= self._paused_until)
 
     def busy_with(self, symbol: str) -> bool:
         return any(k[0] == symbol for k in self.pending)
@@ -209,7 +212,7 @@ class Desk:
     def research_due(self, now: pd.Timestamp) -> bool:
         if not (self.cfg.enabled and self.llm is not None) or (self._research and not self._research.done()):
             return False
-        if self.budget.remaining < 10:          # keep the last calls for actual setups
+        if self.budget.remaining < 10 or now < self._paused_until:   # keep the last calls for actual setups
             return False
         b = self.j.get("desk:brief") or {}
         if not b.get("at"):
@@ -241,6 +244,9 @@ class Desk:
         heads = self.j.news(limit=80, kind="headline", since=(now - pd.Timedelta(hours=12)).isoformat())
         heads.sort(key=lambda n: (n.get("impact") or 0, n["ts"]), reverse=True)
         head_lines = [f"[{n['ts'][5:16]}] (impact {n.get('impact') or 0}) {n['title']}" for n in heads[:30]]
+        # With many markets, brief the ones moving most (the rest follow price action alone).
+        movers = sorted(snapshot, key=lambda k: -abs(snapshot[k]["chg_1d"]))[:self.cfg.research_markets]
+        snapshot = {k: snapshot[k] for k in movers}
         mkt = [f"{s}: {v['price']:.5g}, 1 day {v['chg_1d']:+.2f}%, 5 days {v['chg_5d']:+.2f}%, structure {v['trend']}"
                for s, v in snapshot.items()]
         prompt = (
@@ -256,6 +262,7 @@ class Desk:
                              prompt, BRIEF_SCHEMA, self.cfg.model_research)
         if reply.data is None:
             log.warning("research brief failed: %s", reply.error)
+            self._note_failure(reply.error)
             return None
         markets = {}
         for m in reply.data.get("markets", []):
@@ -275,8 +282,9 @@ class Desk:
         book = self.j.get(f"plan:{self.s.mode}") or {}
         if book.get("week") != week or not self.budget.take():
             return
-        lines = [f"{s}: {p['summary']} Frames {p['frames']}. Scenarios: " + " | ".join(x["text"] for x in p["scenarios"])
-                 for s, p in sorted(book["markets"].items())]
+        ranked = sorted(book["markets"].items(), key=lambda kv: (-abs(kv[1]["score"]), -len(kv[1]["scenarios"])))
+        lines = [f"{s}: {p['summary']} Frames {p['frames']}. Scenarios: " + " | ".join(x["text"] for x in p["scenarios"][:3])
+                 for s, p in ranked[:self.cfg.research_markets]]
         b = self.j.get("desk:brief") or {}
         prompt = (f"Week {week}. TIIM's mechanical top-down plan for each market:\n" + "\n".join(lines) +
                   f"\n\nLatest fundamental brief: {b.get('overview', 'none')}\n"
@@ -321,12 +329,21 @@ class Desk:
             done.append((p, v))
         return done
 
+    def _note_failure(self, error: str) -> None:
+        """Claude says the plan's usage limit is reached (or it is overloaded): stop asking for a while
+        instead of burning calls; TIIM decides alone until then."""
+        if re.search(r"limit|quota|overload|rate|429|529|credit", error or "", re.I):
+            self._paused_until = pd.Timestamp.now(tz="UTC") + pd.Timedelta(minutes=60)
+            self.j.event("desk", f"Claude usage limit reached ({error[:80]}): the desk pauses for an hour, "
+                                 "decisions go back to TIIM alone until then")
+
     def _ask(self, system: str, prompt: str, schema: dict, model: str) -> dict | None:
         if not self.budget.take():
             return None
         r = self.llm.ask(system, prompt, schema, model)
         if r.data is None:
             log.warning("desk call failed: %s", r.error)
+            self._note_failure(r.error)
         return r.data
 
     def review(self, sig, ctx, dec: dict) -> Verdict:

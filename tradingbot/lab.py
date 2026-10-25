@@ -361,7 +361,11 @@ def run_nightly(settings, journal, broker, llm=None) -> dict:
     from .llm import Budget
 
     data = {}
-    for sym in settings.symbols:
+    symbols = list(settings.symbols)
+    if len(symbols) > settings.lab.max_markets:      # a different rotating slice of the markets each night
+        k = (pd.Timestamp.now(tz="UTC").dayofyear * settings.lab.max_markets) % len(symbols)
+        symbols = (symbols[k:] + symbols[:k])[:settings.lab.max_markets]
+    for sym in symbols:
         try:
             df = broker.get_bars(sym, settings.timeframe, settings.lab.history_bars)
             if len(df) > 400:

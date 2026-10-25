@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import random
+import time
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -42,6 +43,10 @@ def _bar_row(ts: pd.Timestamp, bar: pd.Series) -> list:
     return [ts.isoformat(), float(bar["open"]), float(bar["high"]), float(bar["low"]), float(bar["close"])]
 
 
+CYCLE_BUDGET_SECONDS = 150     # live: stop starting new markets after this long; the rest wait for the next cycle
+PLAN_BATCH = 25                # markets planned per cycle at the start of a week
+
+
 class Agent:
     def __init__(self, settings: Settings, broker: Broker, journal: Journal, rng: random.Random | None = None,
                  news=None, earnings=None, desk=None) -> None:
@@ -58,6 +63,8 @@ class Agent:
         self._lab_seen = ""
         self._started = pd.Timestamp.now(tz="UTC")
         self._htf_cache: dict[str, tuple[str, dict]] = {}
+        self._rot = 0                         # where the last cycle stopped (fair rotation over many markets)
+        self._plan_retry: dict[str, pd.Timestamp] = {}   # markets that couldn't be planned yet (no data): try later
         # The strategy library: built-ins plus anything in my_strategies/ (minus disabled ones).
         self.core: list[Strategy] = load_library(settings.db_path.parent, journal=journal)
         self.news_strats: list[Strategy] = [st for st in self.core if "news" in st.needs]
@@ -143,7 +150,16 @@ class Agent:
 
         live_clock = not hasattr(self.broker, "now")
         tf = pd.Timedelta(seconds=TIMEFRAME_SECONDS[self.s.timeframe])
-        for symbol in self.s.symbols:
+        syms = list(self.s.symbols)
+        if live_clock and len(syms) > 1:
+            k = self._rot % len(syms)
+            syms = syms[k:] + syms[:k]
+        deadline = time.monotonic() + CYCLE_BUDGET_SECONDS
+        for n, symbol in enumerate(syms):
+            if live_clock and n and time.monotonic() > deadline:
+                self._rot += n              # next cycle starts where this one stopped
+                log.info("cycle time budget used: %d of %d markets this round, the rest next", n, len(syms))
+                break
             if live_clock and symbol in self.last_bar:
                 # The next bar closes at last bar's open + 2 timeframes; don't hammer the API before that.
                 if pd.Timestamp.now(tz="UTC") < pd.Timestamp(self.last_bar[symbol]) + 2 * tf:
@@ -201,7 +217,9 @@ class Agent:
     # --- top-down (higher timeframe) analysis ---------------------------------------------
     def _htf_frames(self, symbol: str, df: pd.DataFrame) -> dict:
         """Monthly/Weekly/Daily/4H/1H read, refreshed once an hour (cached in between)."""
-        key = df.index[-1].floor("1h").isoformat()   # 1H breaks matter, so refresh every hour
+        # 1H breaks matter, so refresh every hour; each market on its own minute so they don't all refresh together
+        offset = pd.Timedelta(minutes=sum(map(ord, symbol)) % 60)
+        key = (df.index[-1] - offset).floor("1h").isoformat()
         hit = self._htf_cache.get(symbol)
         if hit and hit[0] == key:
             return hit[1]
@@ -255,21 +273,22 @@ class Agent:
     def _ensure_plans(self, now: pd.Timestamp) -> None:
         """Plan every market for the week (from Sunday 18:00 UTC), even ones whose market is still closed."""
         book = self._book(now)
-        missing = [s for s in self.s.symbols if s not in book["markets"]]
+        missing = [s for s in self.s.symbols if s not in book["markets"]
+                   and self._plan_retry.get(s, now - pd.Timedelta(seconds=1)) <= now][:PLAN_BATCH]
         if not missing and book.get("week") == (self.j.get(self._plan_key) or {}).get("week"):
             self._maybe_brief(book, now)
             return
         for sym in missing:
             try:
                 df = self.broker.get_bars(sym, self.s.timeframe, self.s.history_bars)
-                if len(df) < 60:
-                    continue
-                frames = self._htf_frames(sym, df)
+                frames = self._htf_frames(sym, df) if len(df) >= 60 else {}
                 if not frames:
+                    self._plan_retry[sym] = now + pd.Timedelta(hours=1)
                     continue
                 book["markets"][sym] = weekly.market_plan(sym, frames, float(df["close"].iloc[-1]), now)
                 self.j.event("plan", f"{book['week']} plan {sym}: {book['markets'][sym]['summary']}", ts=self.now())
             except Exception as e:  # pragma: no cover - network
+                self._plan_retry[sym] = now + pd.Timedelta(hours=1)
                 log.warning("weekly plan for %s failed: %s", sym, e)
         self.j.set(self._plan_key, book)
         self._maybe_brief(book, now)
@@ -291,7 +310,7 @@ class Agent:
 
     def _maybe_brief(self, book: dict, now: pd.Timestamp) -> None:
         if (self.desk and not book.get("briefing") and not book.get("briefing_asked")
-                and len(book["markets"]) >= len(self.s.symbols) and self.desk.available):
+                and len(book["markets"]) >= 0.9 * len(self.s.symbols) and self.desk.available):
             book["briefing_asked"] = True
             self.j.set(self._plan_key, book)
             self.desk.weekly_briefing(book["week"], now)

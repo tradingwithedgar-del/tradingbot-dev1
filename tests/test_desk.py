@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from tradingbot.backtest import run_backtest, synthetic
 from tradingbot.config import LabConfig, Settings
@@ -141,3 +142,68 @@ def test_lab_run_and_merge_into_learner(tmp_path):
                     "stop_atr": 9, "target_r": 0.1, "max_bars": 500})
     assert g and g.conditions[0][1] == {"period": 21, "level": 20} and len(g.conditions) == 2
     assert (g.stop_atr, g.target_r, g.max_bars) == (3.0, 0.3, 48)
+
+
+def test_all_instruments_limits_and_usage_guard(tmp_path, monkeypatch):
+    import argparse  # noqa: F401
+    import pandas as pd
+
+    import tradingbot.__main__ as cli
+    from tradingbot.config import Settings
+    from tradingbot.desk import Desk
+    from tradingbot.journal import Journal
+
+    for k in ("MAX_OPEN_TRADES", "MAX_OPEN_RISK", "MAX_SAME_GROUP", "BOT_EXCLUDE"):
+        monkeypatch.delenv(k, raising=False)
+    # 20 open trades on demo, still capped on live
+    d = Settings(mode="demo")
+    assert (d.risk.max_open_trades, d.risk.max_total_open_risk, d.desk.daily_calls) == (20, 0.40, 150)
+    d.validate()
+    live = Settings(mode="live")
+    assert live.risk.max_open_trades == 2
+    live.risk.max_open_trades = 20
+    monkeypatch.setenv("ALLOW_LIVE_TRADING", "YES")
+    live.tl_environment = "https://live.tradelocker.com"
+    with pytest.raises(ValueError):
+        live.validate()
+
+    # BOT_SYMBOLS=ALL -> every instrument on the account minus BOT_EXCLUDE
+    class B:
+        def instrument_names(self):
+            return ["AAPL", "EURUSD", "US30", "XAUUSD"]
+    s = Settings(mode="demo")
+    s.symbols = ["ALL"]
+    monkeypatch.setenv("BOT_EXCLUDE", "EURUSD")
+    cli.resolve_symbols(B(), s)
+    assert s.symbols == ["AAPL", "US30", "XAUUSD"]
+
+    # Claude says the usage limit is reached: the desk pauses for an hour
+    j = Journal(tmp_path / "g.db", mode="demo")
+    desk = Desk(Settings(mode="demo"), j, FakeLLM(), background=False)
+    assert desk.available
+    desk._note_failure("Claude usage limit reached, resets at 3pm")
+    assert not desk.available and not desk.research_due(pd.Timestamp.now(tz="UTC"))
+    desk._paused_until = pd.Timestamp(0, tz="UTC")
+    desk._note_failure("reply was not JSON")                   # an ordinary failure doesn't pause the desk
+    assert desk.available
+
+
+def test_many_markets_use_a_time_budget_and_rotate(tmp_path, monkeypatch):
+    import tradingbot.agent as agent_mod
+    from tradingbot.agent import Agent
+    from tradingbot.broker.sim import SimBroker
+    from tradingbot.journal import Journal
+
+    data = {f"M{i}": synthetic(400, 100 + i, seed=i) for i in range(6)}
+    b = SimBroker(data, warmup=300)
+    j = Journal(tmp_path / "t.db", mode="backtest")
+    s = Settings(mode="backtest")
+    s.symbols = list(data)
+    a = Agent(s, b, j)
+    a._plan_retry["M0"] = pd.Timestamp.now(tz="UTC") + pd.Timedelta(hours=1)
+    book = a._book(pd.Timestamp.now(tz="UTC"))
+    assert book["markets"] == {}
+    a._ensure_plans(pd.Timestamp.now(tz="UTC"))
+    planned = set(j.get("plan:backtest")["markets"])
+    assert planned and "M0" not in planned                   # a market waiting for data doesn't block the others
+    assert agent_mod.PLAN_BATCH >= 10 and agent_mod.CYCLE_BUDGET_SECONDS > 0
