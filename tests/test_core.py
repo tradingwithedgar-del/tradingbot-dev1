@@ -311,3 +311,59 @@ def test_subscription_token_in_api_key_slot_is_moved(monkeypatch):
     assert os.getenv("CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oat01-example" and not os.getenv("ANTHROPIC_API_KEY")
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     importlib.reload(config)
+
+
+def test_new_agent_keeps_the_knowledge_and_renames_everywhere(tmp_path, monkeypatch):
+    import argparse
+
+    import tradingbot.__main__ as cli
+    import tradingbot.config as config
+    from tradingbot.config import Settings
+    from tradingbot.journal import Journal
+
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    monkeypatch.setattr(cli, "Settings", lambda: _settings_at(tmp_path))
+    monkeypatch.setenv("AGENT_NAME", "TIIM")
+
+    def _settings_at(p):
+        s = Settings()
+        s.db_path = p / "bot.db"
+        return s
+
+    j = Journal(tmp_path / "bot.db", mode="demo")
+    j.set("learner:demo", {"stats": {"sd_reversal": {"wins": 5}}})
+    (tmp_path / ".env").write_text("TL_EMAIL=x\nAGENT_NAME=TIIM\n")
+    monkeypatch.setattr("tradingbot.config.ROOT", tmp_path)
+    cli.cmd_new_agent(argparse.Namespace(name="Nova!"))
+    assert "AGENT_NAME=Nova\n" in (tmp_path / ".env").read_text() and "TL_EMAIL=x" in (tmp_path / ".env").read_text()
+    backup = next((tmp_path / "backups").glob("tiim-*.db"))
+    assert Journal(backup, mode="demo").get("learner:demo") == {"stats": {"sd_reversal": {"wins": 5}}}
+    assert Journal(tmp_path / "bot.db", mode="demo").get("learner:demo")             # knowledge untouched
+    assert any(e["kind"] == "handover" and "Nova" in e["message"] for e in j.events(10, "demo"))
+    monkeypatch.setenv("AGENT_NAME", "Nova")
+    assert Settings().agent_name == "Nova"
+
+
+def test_dashboard_and_desk_use_the_agent_name(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from tradingbot.dashboard.app import create_app
+    from tradingbot.desk import _Named
+    from tradingbot.journal import Journal
+
+    Journal(tmp_path / "x.db", mode="demo")
+    monkeypatch.setenv("AGENT_NAME", "Nova")
+    html = TestClient(create_app(tmp_path / "x.db")).get("/").text
+    assert "<title>Nova Dashboard</title>" in html and "TIIM" not in html
+
+    seen = {}
+
+    class Fake:
+        name = "fake"
+
+        def ask(self, system, prompt, schema, model, **kw):
+            seen.update(system=system, prompt=prompt)
+
+    monkeypatch.setenv("AGENT_NAME", "Nova")
+    _Named(Fake(), "Nova").ask("You are TIIM, the judge.", "TIIM's odds", {}, "opus")
+    assert seen == {"system": "You are Nova, the judge.", "prompt": "Nova's odds"}

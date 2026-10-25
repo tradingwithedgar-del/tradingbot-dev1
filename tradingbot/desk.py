@@ -152,9 +152,23 @@ def dossier(sig, ctx, dec: dict, brief: dict | None, events: list[str], plan: di
     return "\n".join(lines)
 
 
+class _Named:
+    """Gives the Claude agents the current agent's name wherever the prompts say TIIM."""
+
+    def __init__(self, llm, name: str) -> None:
+        self._llm, self.name_ = llm, name
+        self.name = getattr(llm, "name", "claude")
+
+    def ask(self, system: str, prompt: str, schema: dict, model: str, **kw):
+        if self.name_ != "TIIM":
+            system, prompt = system.replace("TIIM", self.name_), prompt.replace("TIIM", self.name_)
+        return self._llm.ask(system, prompt, schema, model, **kw)
+
+
 class Desk:
     def __init__(self, settings: Settings, journal: Journal, llm, news=None, background: bool = True) -> None:
-        self.s, self.j, self.llm, self.news = settings, journal, llm, news
+        self.s, self.j, self.news = settings, journal, news
+        self.llm = _Named(llm, settings.agent_name) if llm is not None else None
         self.cfg = settings.desk
         self.budget = Budget(journal, self.cfg.daily_calls, key="desk")
         self.background = background

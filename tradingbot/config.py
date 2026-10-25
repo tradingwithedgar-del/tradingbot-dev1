@@ -163,6 +163,9 @@ class LabConfig:
 
 @dataclass
 class Settings:
+    # The agent's name (shown in logs, the dashboard and the desk's prompts). Its knowledge lives in the journal,
+    # so renaming never loses anything: see `tiim new-agent`.
+    agent_name: str = field(default_factory=lambda: (os.getenv("AGENT_NAME") or "TIIM").strip() or "TIIM")
     mode: str = field(default_factory=lambda: os.getenv("BOT_MODE", "demo").lower())
     symbols: list[str] = field(
         default_factory=lambda: [s.strip() for s in os.getenv("BOT_SYMBOLS", DEFAULT_SYMBOLS).split(",") if s.strip()]

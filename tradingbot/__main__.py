@@ -13,6 +13,7 @@
     python -m tiim claude              # check that TIIM can reach Claude
     python -m tiim plan [--rebuild]    # this week's plan for every market
     python -m tiim status
+    python -m tiim new-agent NAME      # retire this agent, start a new one with the same knowledge
     python -m tiim stop | resume
 """
 from __future__ import annotations
@@ -152,9 +153,9 @@ def cmd_run(args) -> None:
     agent = Agent(s, broker, journal, news=news, earnings=earnings, desk=desk)
     logging.info("Strategy library: %s", ", ".join(st.name for st in agent.core))
     banner = "LIVE ACCOUNT - REAL MONEY" if s.is_live else "demo account"
-    logging.info("TIIM started on %s | symbols=%s tf=%s risk=%.1f%% target=%.0fR",
-                 banner, s.symbols, s.timeframe, s.risk.risk_per_trade * 100, s.risk.reward_multiple)
-    journal.event("start", f"TIIM started ({banner})")
+    logging.info("%s started on %s | symbols=%s tf=%s risk=%.1f%% target=%.0fR",
+                 s.agent_name, banner, s.symbols, s.timeframe, s.risk.risk_per_trade * 100, s.risk.reward_multiple)
+    journal.event("start", f"{s.agent_name} started ({banner})")
     while True:
         try:
             agent.run_cycle()
@@ -318,6 +319,40 @@ def cmd_stop(args) -> None:
     print(f"created {s.stop_file}: no new real trades will be opened (open trades keep their SL/TP).")
 
 
+def cmd_new_agent(args) -> None:
+    """Hand the account to a new agent under a new name. The knowledge base (trades, learned odds, filters,
+    experiments, weekly plan) stays in the journal, so the new agent starts with everything the old one learned.
+    A backup of the journal is saved first. Stop the running agent before this, restart it after."""
+    import re
+    import shutil
+
+    from .config import ROOT
+    from .journal import Journal
+
+    name = re.sub(r"[^A-Za-z0-9 _-]", "", args.name).strip()
+    if not name:
+        raise SystemExit("Give the new agent a name, e.g. `tiim new-agent NOVA`.")
+    s = Settings()
+    old = s.agent_name
+    backups = s.db_path.parent / "backups"
+    backups.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    j = Journal(s.db_path, mode=s.mode)
+    j.conn.execute("PRAGMA wal_checkpoint(FULL)")
+    backup = backups / f"{old.lower()}-{stamp}.db"
+    shutil.copy2(s.db_path, backup)
+    env = ROOT / ".env"
+    text = env.read_text() if env.exists() else ""
+    line = f"AGENT_NAME={name}"
+    text = re.sub(r"(?m)^AGENT_NAME=.*$", line, text) if re.search(r"(?m)^AGENT_NAME=", text) else text.rstrip("\n") + "\n" + line + "\n"
+    env.write_text(text)
+    j.event("handover", f"{old} retired; {name} takes over the account with all of {old}'s knowledge "
+                        f"(journal backup: {backup.name})")
+    print(f"{old} retired. {name} takes over with the same rules, strategy library and everything learned so far.")
+    print(f"Backup of {old}'s journal: {backup}")
+    print("Start it with: systemctl restart tiim   (and the dashboard: systemctl restart tiim-dashboard)")
+
+
 def cmd_resume(args) -> None:
     from .journal import Journal
 
@@ -374,6 +409,9 @@ def main() -> None:
     sub.add_parser("claude", help="check that TIIM can reach Claude (one tiny call)").set_defaults(fn=cmd_claude)
     sub.add_parser("lab", help="run the Strategy Lab now (it also runs nightly)").set_defaults(fn=cmd_lab)
     sub.add_parser("stop").set_defaults(fn=cmd_stop)
+    na = sub.add_parser("new-agent", help="retire this agent and start a new one under a new name, same knowledge")
+    na.add_argument("name")
+    na.set_defaults(fn=cmd_new_agent)
     sub.add_parser("resume").set_defaults(fn=cmd_resume)
     args = p.parse_args()
     args.fn(args)

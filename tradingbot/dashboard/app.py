@@ -73,7 +73,8 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     if not path.exists():
         raise SystemExit(f"No journal at {path}. Run the agent or a backtest first.")
     j = Journal(path)
-    app = FastAPI(title="TIIM dashboard")
+    name = settings.agent_name
+    app = FastAPI(title=f"{name} dashboard")
 
     password = os.getenv("DASHBOARD_PASSWORD", "")
     if password:
@@ -89,7 +90,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 except Exception:
                     ok = False
             if not ok:
-                return Response("Login required", status_code=401, headers={"WWW-Authenticate": 'Basic realm="TIIM"'})
+                return Response("Login required", status_code=401, headers={"WWW-Authenticate": f'Basic realm="{name}"'})
             return await call_next(request)
 
     def closed(mode: str, shadow: int | None = 0) -> list[dict]:
@@ -99,7 +100,10 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
     @app.get("/")
     def index():
-        return FileResponse(STATIC / "index.html")
+        if name == "TIIM":
+            return FileResponse(STATIC / "index.html")
+        html = (STATIC / "index.html").read_text(encoding="utf-8").replace("TIIM", name)
+        return Response(html, media_type="text/html")
 
     @app.get("/plotly.min.js")
     def plotly_js():

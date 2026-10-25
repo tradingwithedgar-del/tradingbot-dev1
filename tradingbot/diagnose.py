@@ -53,7 +53,7 @@ def _why(reasons: list[str]) -> str:
 def report(j: Journal, s: Settings, now: pd.Timestamp | None = None, hours: int = 24) -> str:
     now = now or pd.Timestamp.now(tz="UTC")
     since = (now - pd.Timedelta(hours=hours)).isoformat()
-    out: list[str] = [f"TIIM over the last {hours} hours ({s.mode} account)", ""]
+    out: list[str] = [f"{s.agent_name} over the last {hours} hours ({s.mode} account)", ""]
 
     halted = j.get(f"halted:{s.mode}")
     if halted:
