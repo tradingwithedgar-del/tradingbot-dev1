@@ -32,6 +32,16 @@ if os.getenv("ANTHROPIC_API_KEY", "").startswith("sk-ant-oat"):
     del os.environ["ANTHROPIC_API_KEY"]
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def agent_name() -> str:
+    return (os.getenv("AGENT_NAME") or "TIIM").strip() or "TIIM"
+
+
+def branded(text):
+    """Text written with the original name, shown under the agent's current name."""
+    name = agent_name()
+    return text.replace("TIIM", name) if name != "TIIM" and isinstance(text, str) else text
 DATA_DIR = Path(os.getenv("BOT_DATA_DIR", ROOT / "data"))
 
 # BOT_SYMBOLS=ALL trades every instrument on the account (BOT_EXCLUDE removes names from that).

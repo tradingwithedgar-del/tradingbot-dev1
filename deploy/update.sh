@@ -38,6 +38,27 @@ sync_units() {
 }
 sync_units
 
+sync_agent_name() {
+  # The agent's name (AGENT_NAME in .env) becomes the command you type and the service description.
+  local name lower changed=0
+  name=$(grep -E '^AGENT_NAME=' "$APP/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' | tr -cd 'A-Za-z0-9_-')
+  [ -z "$name" ] && return 0
+  lower=$(echo "$name" | tr 'A-Z' 'a-z')
+  if [ "$lower" != "tiim" ] && [ ! -e "/usr/local/bin/$lower" ]; then
+    ln -s /usr/local/bin/tiim "/usr/local/bin/$lower" && echo "command '$lower' ready"
+  fi
+  for unit in tiim tiim-dashboard tiim-update tiim-lab; do
+    mkdir -p "/etc/systemd/system/$unit.service.d"
+    want="[Unit]\nDescription=$name ($unit)\n"
+    if [ "$(printf "$want")" != "$(cat "/etc/systemd/system/$unit.service.d/name.conf" 2>/dev/null)" ]; then
+      printf "$want" > "/etc/systemd/system/$unit.service.d/name.conf"; changed=1
+    fi
+  done
+  [ "$changed" = 1 ] && systemctl daemon-reload
+  return 0
+}
+sync_agent_name
+
 as_tiim git fetch --quiet origin || exit 0
 BRANCH=$(as_tiim git rev-parse --abbrev-ref HEAD)
 OLD=$(as_tiim git rev-parse HEAD)

@@ -367,3 +367,22 @@ def test_dashboard_and_desk_use_the_agent_name(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_NAME", "Nova")
     _Named(Fake(), "Nova").ask("You are TIIM, the judge.", "TIIM's odds", {}, "opus")
     assert seen == {"system": "You are Nova, the judge.", "prompt": "Nova's odds"}
+
+
+def test_old_name_is_replaced_everywhere_users_look(tmp_path, monkeypatch):
+    import logging
+
+    import tradingbot.__main__ as cli
+    from tradingbot.config import branded
+    from tradingbot.journal import Journal
+
+    monkeypatch.setenv("AGENT_NAME", "Nova")
+    assert branded("TIIM learned; TIIM's odds") == "Nova learned; Nova's odds"
+    j = Journal(tmp_path / "n.db", mode="demo")
+    j.event("lesson", "TIIM improved sd_reversal")
+    assert j.events(5, "demo")[0]["message"] == "Nova improved sd_reversal"
+    rec = logging.LogRecord("x", logging.INFO, "", 0, "TIIM started on demo", None, None)
+    cli._NameFilter().filter(rec)
+    assert rec.msg == "Nova started on demo"
+    monkeypatch.setenv("AGENT_NAME", "TIIM")
+    assert branded("TIIM stays") == "TIIM stays"

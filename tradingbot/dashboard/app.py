@@ -13,7 +13,7 @@ import os
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
-from ..config import Settings
+from ..config import Settings, branded
 from ..journal import Journal
 from ..learning import CANDIDATE, EdgeStat
 from ..strategies.registry import disabled, discover
@@ -222,7 +222,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             out.append({
                 "name": n,
                 "title": (meta.title if meta and CANDIDATE not in n else None),
-                "author": meta.author if meta else "TIIM",
+                "author": branded(meta.author if meta else "TIIM"),
                 "markets": list(meta.markets) if meta else [],
                 "kind": kind,
                 "stage": stage,

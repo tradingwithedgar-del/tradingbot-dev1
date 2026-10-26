@@ -108,4 +108,6 @@ def text(book: dict) -> str:
         if book.get("notes", {}).get(sym):
             out.append(f"  desk: {book['notes'][sym]}")
         out += [f"  - {s['text']}" for s in p["scenarios"]]
-    return "\n".join(out)
+    from .config import branded
+
+    return branded("\n".join(out))

@@ -363,7 +363,8 @@ def cmd_new_agent(args) -> None:
                         f"(journal backup: {backup.name})")
     print(f"{old} retired. {name} takes over with the same rules, strategy library and everything learned so far.")
     print(f"Backup of {old}'s journal: {backup}")
-    print("Start it with: systemctl restart tiim   (and the dashboard: systemctl restart tiim-dashboard)")
+    print(f"Next: systemctl start tiim-update.service   (gives you the `{name.lower()}` command), then")
+    print("      systemctl restart tiim tiim-dashboard")
 
 
 def cmd_resume(args) -> None:
@@ -379,9 +380,29 @@ def cmd_resume(args) -> None:
     print("resumed")
 
 
+class _NameFilter(logging.Filter):
+    """Log lines written with the original name appear under the agent's current name."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        from .config import branded
+
+        record.msg = branded(str(record.msg))
+        return True
+
+
 def main() -> None:
+    import builtins
+
+    from .config import branded
+
+    global print
+    print = lambda *a, **k: builtins.print(*[branded(x) for x in a], **k)   # noqa: E731 - names in every printout
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    p = argparse.ArgumentParser(prog="tiim", description="TIIM - self-learning trading agent")
+    for h in logging.getLogger().handlers:
+        h.addFilter(_NameFilter())
+    from .config import agent_name
+
+    p = argparse.ArgumentParser(prog=agent_name().lower(), description=f"{agent_name()} - self-learning trading agent")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("run").set_defaults(fn=cmd_run)
     sub.add_parser("strategies", help="list TIIM's strategy library").set_defaults(fn=cmd_strategies)

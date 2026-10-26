@@ -397,5 +397,7 @@ def summary(report: dict) -> str:
         lines.append(f"  {'PASS' if r['passed'] else 'fail'} {r['gid']} {i['win_rate']:.0%}/{u['win_rate']:.0%} win, "
                      f"{i['trades']}+{u['trades']} trades, {i['total_r']:+.0f}R/{u['total_r']:+.0f}R - {r['why']}")
         lines.append(f"       {r['description'][:110]}")
-    return "\n".join(lines)
+    from .config import branded
+
+    return branded("\n".join(lines))
 

@@ -115,6 +115,9 @@ class Journal:
             self.conn.commit()
 
     def event(self, kind: str, message: str, data: Any = None, ts: str | None = None) -> None:
+        from .config import branded
+
+        message = branded(message)
         with self._lock:
             self.conn.execute("INSERT INTO events (ts, mode, kind, message, data) VALUES (?,?,?,?,?)",
                               (ts or self.clock(), self.mode, kind, message, json.dumps(data, default=str) if data is not None else None))

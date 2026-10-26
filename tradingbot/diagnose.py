@@ -143,4 +143,6 @@ def report(j: Journal, s: Settings, now: pd.Timestamp | None = None, hours: int 
     lessons = [e for e in j.events(500, s.mode) if e["kind"] in ("lesson", "tuning", "news", "manage", "evolution", "lab") and e["ts"] >= since]
     if lessons:
         out += ["", "Notable:"] + [f"  {e['ts'][5:16].replace('T', ' ')} [{e['kind']}] {e['message'][:100]}" for e in lessons[:8]]
-    return "\n".join(out)
+    from .config import branded
+
+    return branded("\n".join(out))
