@@ -158,7 +158,8 @@
       const from = snap(Math.max(t0, tMin));
       const to = tr.closed_at ? snap(Math.min(ts(tr.closed_at), tMax)) : tMax;
       if (from <= tMax) {
-        for (const [price, color, style, title] of [[tr.entry, C.entry, 0, 'entry'], [tr.stop, C.bad, 2, 'stop'], [tr.take_profit, C.good, 2, 'target']]) {
+        for (const [price, color, style, title] of [[tr.entry, C.entry, 0, 'entry'], [tr.stop, C.bad, 2, 'stop'], [tr.take_profit, C.good, 2, 'target'],
+                                                   [tr.stop_now, C.entry, 1, 'protected stop']]) {
           if (price == null) continue;
           const seg = chart.addSeries(LW.LineSeries, { color, lineWidth: tr.status === 'open' ? 2 : 1, lineStyle: style,
             priceLineVisible: false, lastValueVisible: tr.status === 'open', title: tr.status === 'open' ? `${title} #${tr.id}` : '',

@@ -107,6 +107,7 @@ class Learner:
         self.population: dict[str, dict] = {}          # experimental genomes
         self.tune_counter: dict[str, int] = {}
         self.challengers: dict[str, dict] = {}         # strategy -> tweaked parameter set under test
+        self._prot_cache: dict[str, tuple[float, float]] = {}
         self.load()
 
     # --- persistence -----------------------------------------------------------
@@ -162,6 +163,29 @@ class Learner:
             self.stat(f"{s}|{cond}").update(r, w, self.cfg.decay)
         self._refresh_filters(s)
         self.save()
+
+    # --- profit protection discretion ---------------------------------------------------
+    def protection_scale(self, strategy: str) -> float:
+        """How patiently this strategy protects profit: >1 waits longer, <1 protects sooner.
+        Learned from closed trades: protected exits that price later took to target mean the stop cut winners
+        short (be patient); trades that were +1R and still ended as losses mean protection came too late."""
+        import time as _t
+        hit = self._prot_cache.get(strategy)
+        if hit and _t.time() - hit[0] < 1800:
+            return hit[1]
+        rows = self.j.trades("strategy = ? AND status = 'closed' AND mode = ?", (strategy.split(CANDIDATE)[0], self.j.mode),
+                             order="id DESC", limit=60)
+        prot = [t for t in rows if (t.get("decision") or {}).get("close_reason") == "protected"
+                and "after_exit" in (t.get("postmortem") or {})]
+        cut = sum(bool(t["postmortem"]["after_exit"].get("hit_target")) for t in prot)
+        reached = [t for t in rows if (t.get("mfe_r") or 0) >= 1.0]
+        gave = sum((t.get("r_multiple") or 0) < -0.5 for t in reached)
+        scale = 1.0
+        if len(prot) + len(reached) >= 10:
+            scale = 1.0 + 0.6 * (cut / max(1, len(prot)) - gave / max(1, len(reached)))
+            scale = max(0.7, min(1.5, scale))
+        self._prot_cache[strategy] = (_t.time(), scale)
+        return scale
 
     # --- decisions -------------------------------------------------------------------
     def decide(self, strategy: Strategy, features: dict, symbol: str, live_approved: list[str],

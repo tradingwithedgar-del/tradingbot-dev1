@@ -18,6 +18,7 @@ TAG_NOTES = {
     "clean_win": "Reached target without drawing down more than 0.5R.",
     "closed_manually": "You closed this trade in TradeLocker. The agent keeps following the original plan virtually to see what it would have done.",
     "closed_by_agent": "The agent closed this trade early (e.g. before earnings).",
+    "protected_exit": "Stopped out at the moved stop (break-even or a locked profit) after the trade had worked.",
     "survived_drawdown_win": "Won after drawing down more than 0.7R first.",
 }
 

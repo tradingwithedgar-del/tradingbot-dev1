@@ -122,6 +122,11 @@ Every time a bar closes, for each symbol the agent:
   15m, 1H, 4H and Daily candles. The `candle_reversal` strategy trades them only at a higher-timeframe or fresh
   zone after a move into it; weak patterns wait for a confirmation candle. Every trade records which pattern it
   had, so TIIM learns which ones pay on which market. Strong patterns are drawn on the chart.
+* **Profit protection.** Once a trade is in profit the stop only ever moves toward profit: break-even plus costs
+  at about +1R, then small locked profits (+0.5R at 1.5R, +1R at 2R) or behind the latest swing the trade made.
+  The original stop stays on record for measuring R. TIIM learns per strategy how patient to be (it waits longer
+  when protected exits keep going on to hit target, protects earlier when +1R trades keep turning into losses).
+  `PROFIT_PROTECTION=0` turns it off.
 * **Weekly plan.** Every Sunday 18:00 UTC TIIM reads each market top-down, marks key zones and forming patterns,
   and writes the week's plan (`tiim plan`, dashboard "Weekly plan"). Real trades follow the planned direction;
   a daily close beyond the plan's invalidation level re-plans that market. `PLAN_FILTER=0` turns the gate off.

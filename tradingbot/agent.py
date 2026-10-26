@@ -12,6 +12,7 @@ import pandas as pd
 from . import postmortem as pm
 from .analysis.context import MarketContext
 from . import plan as weekly
+from . import protect
 from .analysis import htf
 from .analysis import candles as cdl
 from .analysis.view import chart_view
@@ -396,15 +397,39 @@ class Agent:
                 except Exception:  # pragma: no cover - network
                     log.exception("time stop failed for #%s", t["id"])
                 continue
-            be_at = self.learner.breakeven.get(t["strategy"])
-            if be_at and not dec.get("breakeven_moved") and (t["mfe_r"] or 0) >= be_at:
-                try:
-                    if self.broker.modify_stop(t["broker_id"], t["entry"]):
-                        dec["breakeven_moved"] = True
-                        self.j.update_trade(t["id"], decision=dec)
-                        self.j.event("manage", f"#{t['id']} {t['symbol']} stop moved to break-even at +{be_at}R", ts=self.now())
-                except Exception:  # pragma: no cover - network
-                    log.exception("break-even move failed")
+            self._protect(t, ctx, dec, real=True)
+
+    def _protect(self, t: dict, ctx: MarketContext, dec: dict, real: bool) -> None:
+        """Move the stop toward profit as the trade works (break-even plus costs, then small locked profits,
+        then behind the latest swing). Only ever tightens; the original stop stays on record for R."""
+        if not self.s.profit_protection or dec.get("closed_by_agent"):
+            return
+        if dec.get("protect_retry_at", 0) > (t["bars_held"] or 0):
+            return
+        scale = self.learner.protection_scale(t["strategy"])
+        idx = ctx.df.index.get_indexer([pd.Timestamp(t["opened_at"])], method="nearest")[0]
+        step = protect.plan(t, dec, ctx, scale=scale, be_at=self.learner.breakeven.get(t["strategy"]), swing_after=int(idx))
+        if step is None:
+            return
+        new, label = step
+        if real:
+            try:
+                if not self.broker.modify_stop(t["broker_id"], new):
+                    raise RuntimeError("broker refused the stop")
+            except Exception as e:  # pragma: no cover - network
+                dec["protect_retry_at"] = (t["bars_held"] or 0) + 3
+                self.j.update_trade(t["id"], decision=dec)
+                log.warning("stop move for #%s failed: %s", t["id"], e)
+                return
+        old = dec.get("stop_now", t["stop"])
+        dec["stop_now"], dec["protected"] = float(new), label
+        dec["breakeven_moved"] = True
+        self.j.update_trade(t["id"], decision=dec)
+        risk = abs(t["entry"] - t["stop"]) or 1e-12
+        locked = (new - t["entry"]) * (1 if t["side"] == "buy" else -1) / risk
+        self.j.event("manage", f"#{t['id']} {t['symbol']} {'' if real else '(virtual) '}stop {old:.5g} -> {new:.5g}: "
+                               f"{label} ({locked:+.2f}R secured, trade reached +{t['mfe_r']:.1f}R)",
+                     {"trade_id": t["id"]}, ts=self.now())
 
     def _news_guard(self, t: dict, ctx: MarketContext, dec: dict) -> bool:
         """Major news broke against an open trade: protect it. Returns True if the trade was closed."""
@@ -428,6 +453,7 @@ class Agent:
             elif cur_r >= self.s.news.guard_breakeven_r and not dec.get("breakeven_moved"):
                 if self.broker.modify_stop(t["broker_id"], t["entry"]):
                     dec["breakeven_moved"] = True
+                    dec["stop_now"] = float(t["entry"])
                     action = f"stop moved to break-even (trade was {cur_r:+.1f}R)"
         except Exception:
             log.exception("news guard action failed for #%s", t["id"])
@@ -492,10 +518,12 @@ class Agent:
             return "target"
         if abs(exit_price - t["stop"]) <= tol:
             return "stop"
+        if dec.get("stop_now") is not None and abs(exit_price - dec["stop_now"]) <= tol:
+            return "protected"     # the moved (profit-protecting) stop did its job
         if (exit_price - t["stop"]) * (1 if t["side"] == "buy" else -1) < 0:
             return "stop"   # filled beyond the stop: the market gapped over it
         if dec.get("breakeven_moved") and abs(exit_price - entry) <= tol:
-            return "breakeven"
+            return "protected"
         return "manual"
 
     def _close_trade(self, t: dict, exit_price: float, exit_time: str, pnl: float, r: float, entry: float | None = None,
@@ -510,6 +538,8 @@ class Agent:
             tags = ["closed_manually"] + tags
         elif reason == "agent":
             tags = ["closed_by_agent"] + tags
+        elif reason == "protected":
+            tags = ["protected_exit"] + tags
         atr = float((t.get("features") or {}).get("atr") or 0.0)
         watch = None if manual else pm.new_watch(t, atr)
         dec = t.get("decision") or {}
@@ -555,14 +585,16 @@ class Agent:
                 continue
             self._update_excursions(t, ctx)
             exit_price = None
+            dec = t.get("decision") or {}
+            stop = float(dec.get("stop_now", t["stop"]))        # the protected stop, once one is set
             if t["side"] == "buy":
-                if lo <= t["stop"]:
-                    exit_price = t["stop"]
+                if lo <= stop:
+                    exit_price = stop
                 elif hi >= t["take_profit"]:
                     exit_price = t["take_profit"]
             else:
-                if hi >= t["stop"]:
-                    exit_price = t["stop"]
+                if hi >= stop:
+                    exit_price = stop
                 elif lo <= t["take_profit"]:
                     exit_price = t["take_profit"]
             if exit_price is None and (self._time_up(t) or flatten_reason(t["symbol"], ctx.time + self._tf)):
@@ -570,7 +602,10 @@ class Agent:
             if exit_price is not None:
                 d = 1 if t["side"] == "buy" else -1
                 r = (exit_price - t["entry"]) * d / (abs(t["entry"] - t["stop"]) or 1e-12)
-                self._close_trade(t, exit_price, ctx.time.isoformat(), 0.0, r)
+                moved = "stop_now" in dec and exit_price == stop and stop != t["stop"]
+                self._close_trade(t, exit_price, ctx.time.isoformat(), 0.0, r, reason="protected" if moved else "")
+            else:
+                self._protect(t, ctx, dec, real=False)
 
     def _advance_watchers(self, ctx: MarketContext) -> None:
         bar = ctx.bar

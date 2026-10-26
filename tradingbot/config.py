@@ -191,6 +191,8 @@ class Settings:
     # from the 4H average, big day, extreme RSI). EXTENSION_FILTER=0 turns it off.
     # Weekly plan: real trades only in the direction planned for the week (PLAN_FILTER=0 turns it off).
     plan_filter: bool = field(default_factory=lambda: os.getenv("PLAN_FILTER", "1") not in {"0", "false", "no", "NO"})
+    # Move the stop to break-even / small locked profits as a trade works (PROFIT_PROTECTION=0 turns it off).
+    profit_protection: bool = field(default_factory=lambda: os.getenv("PROFIT_PROTECTION", "1") not in {"0", "false", "no", "NO"})
     extension_filter: bool = field(default_factory=lambda: os.getenv("EXTENSION_FILTER", "1") not in {"0", "false", "no", "NO"})
     history_bars: int = 400
     poll_seconds: int = 20

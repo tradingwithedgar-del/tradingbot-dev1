@@ -284,7 +284,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 "exit_price", "r_multiple", "reason"]
         trades = j.trades("mode=? AND symbol=? AND (status='open' OR closed_at >= ?)", (mode, symbol, start),
                           order="id DESC", limit=40)
-        v["trades"] = [{k: t.get(k) for k in keep} | {"stop_now": (t.get("decision") or {}).get("breakeven_moved")}
+        v["trades"] = [{k: t.get(k) for k in keep} | {"stop_now": (t.get("decision") or {}).get("stop_now")}
                        for t in trades if not t["shadow"] or t["status"] == "open"]
         return v
 
