@@ -68,11 +68,12 @@ NEW=$(as_tiim git rev-parse "origin/$BRANCH")
 echo "TIIM update: $OLD -> $NEW"
 as_tiim git merge --ff-only --quiet "origin/$BRANCH" || { echo "update could not be applied cleanly"; exit 1; }
 as_tiim "$APP/.venv/bin/pip" install -q -r requirements.txt
-if as_tiim "$APP/.venv/bin/python" -m pytest -q -x >/tmp/tiim-update-tests.log 2>&1; then
+umask 077   # the check log is readable by root only
+if as_tiim "$APP/.venv/bin/python" -m pytest -q -x >/var/log/tiim-update-tests.log 2>&1; then
   systemctl restart tiim.service tiim-dashboard.service
   echo "TIIM updated and restarted: $(as_tiim git log -1 --format=%s)"
 else
   echo "Checks FAILED on the update - rolling back, TIIM keeps running the previous version"
-  tail -20 /tmp/tiim-update-tests.log
+  tail -20 /var/log/tiim-update-tests.log
   as_tiim git reset --hard --quiet "$OLD"
 fi
