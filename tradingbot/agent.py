@@ -694,6 +694,12 @@ class Agent:
                 if block:
                     action = "shadow"
                     why.append(block)
+                else:
+                    f = sig.features
+                    why.append(f"checked before entry: trend {f.get('htf_structure', '?')} ({f.get('htf_align', '?')} it), "
+                               f"weekly plan {f.get('plan_agree', '?')}, move {f.get('extended', '?')}, "
+                               f"news {f.get('news_agree', '?')}, 15m candle {f.get('candle', 'none')}, "
+                               f"higher-timeframe candle {f.get('htf_candle', 'none')}")
             dec = {"action": action, "p": round(decision.p, 3), "expected_r": round(decision.expected_r, 3),
                    "stat_key": decision.stat_key, "why": why}
             if action == "trade" and self.desk:
@@ -722,6 +728,11 @@ class Agent:
         if gap:
             return gap
         f = sig.features
+        if not hasattr(self.broker, "now"):                 # live: the analysis must exist before real money moves
+            if self.s.plan_filter and not self.plan_for(sig.symbol):
+                return "no weekly plan for this market yet (still analysing the markets this week)"
+            if self.s.htf_filter and f.get("htf_align") == "unknown":
+                return "higher-timeframe analysis not available for this market yet"
         if self.s.plan_filter:
             why = weekly.against(self.plan_for(sig.symbol), sig.side, f)
             if why:

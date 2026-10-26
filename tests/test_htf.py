@@ -162,3 +162,38 @@ def test_trend_rule_mixed_bias_follows_4h_and_reversal_needs_a_break():
     assert "4H break of structure" in sell["htf_reversal"]
     frames["4H"].breaks = [{"type": "bos", "dir": -1, "level": 100.0, "bars_ago": 30}]   # too old
     assert not htf.features(frames, "sell", 99, 101, 100, 101)["htf_reversal"]
+
+
+def test_live_real_trades_wait_for_the_weekly_plan_and_higher_timeframe_read(tmp_path):
+    import tempfile
+    from pathlib import Path
+
+    from tradingbot.agent import Agent
+    from tradingbot.broker.sim import SimBroker
+    from tradingbot.journal import Journal
+    from tradingbot.strategies import Signal
+
+    class Live:                                    # a live-looking broker: no .now attribute
+        def __init__(self, b):
+            self._b = b
+
+        def __getattr__(self, n):
+            if n == "now":
+                raise AttributeError(n)
+            return getattr(self._b, n)
+
+    s = Settings()
+    s.mode = "backtest"
+    sim = SimBroker({"BTCUSD": synthetic(600, 100, seed=2)}, warmup=300)
+    a = Agent(s, Live(sim), Journal(Path(tempfile.mkdtemp()) / "l.db", mode="backtest"))
+    sig = Signal("BTCUSD", "structure_trend", "buy", 100.0, 99.0, 103.0, features={"htf_align": "with"})
+    ctx = type("C", (), {"close": 100.0, "atr_now": 1.0})()
+    q = sim.get_quote("BTCUSD")
+    assert "no weekly plan" in a._entry_blocker(sig, ctx, q, [], set())
+    a.j.set("plan:backtest", {"week": "x", "markets": {"BTCUSD": {"direction": "both", "status": "active", "symbol": "BTCUSD",
+                                                                  "summary": "s", "scenarios": []}}})
+    sig.features["htf_align"] = "unknown"
+    assert "higher-timeframe analysis not available" in a._entry_blocker(sig, ctx, q, [], set())
+    sig.features["htf_align"] = "with"
+    why = a._entry_blocker(sig, ctx, q, [], set())
+    assert not why or "weekly plan" not in why and "higher-timeframe analysis" not in why
