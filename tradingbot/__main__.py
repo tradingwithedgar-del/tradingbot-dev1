@@ -241,6 +241,14 @@ def cmd_why(args) -> None:
     print(report(Journal(args.db or s.db_path, mode=s.mode), s, hours=args.hours))
 
 
+def cmd_autopsy(args) -> None:
+    from .diagnose import autopsy
+    from .journal import Journal
+
+    s = Settings()
+    print(autopsy(Journal(args.db or s.db_path, mode=s.mode), s, days=args.days))
+
+
 def cmd_desk(args) -> None:
     from .desk import scorecard, scorecard_text
     from .journal import Journal
@@ -433,6 +441,10 @@ def main() -> None:
     w.add_argument("--hours", type=int, default=24)
     w.add_argument("--db", default=None)
     w.set_defaults(fn=cmd_why)
+    ap = sub.add_parser("autopsy", help="where the money went: results by strategy, market, side, session, exit")
+    ap.add_argument("--days", type=int, default=45)
+    ap.add_argument("--db", default=None)
+    ap.set_defaults(fn=cmd_autopsy)
     dk = sub.add_parser("desk", help="the trading desk: research brief, recent debates, report cards, Strategy Lab")
     dk.add_argument("--db", default=None)
     dk.set_defaults(fn=cmd_desk)

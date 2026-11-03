@@ -148,3 +148,109 @@ def report(j: Journal, s: Settings, now: pd.Timestamp | None = None, hours: int 
     from .config import branded
 
     return branded("\n".join(out))
+
+
+# --- performance autopsy -------------------------------------------------------------------
+def _stats(rows: list[dict]) -> dict:
+    rs = [float(t["r_multiple"]) for t in rows if t.get("r_multiple") is not None]
+    pn = [float(t["pnl"] or 0) for t in rows]
+    wins = [x for x in rs if x > 0]
+    losses = [x for x in rs if x <= 0]
+    gp, gl = sum(x for x in pn if x > 0), -sum(x for x in pn if x < 0)
+    return {"n": len(rows), "win": len(wins) / len(rs) if rs else 0.0, "avg_r": sum(rs) / len(rs) if rs else 0.0,
+            "pnl": sum(pn), "pf": (gp / gl) if gl else float("inf") if gp else 0.0,
+            "avg_win": sum(wins) / len(wins) if wins else 0.0, "avg_loss": sum(losses) / len(losses) if losses else 0.0}
+
+
+def _line(label: str, st: dict) -> str:
+    pf = "inf" if st["pf"] == float("inf") else f"{st['pf']:.2f}"
+    return (f"  {label[:24]:<24} n={st['n']:<4} win={st['win']:.0%} avgR={st['avg_r']:+.2f} "
+            f"pnl={st['pnl']:+.0f} PF={pf}")
+
+
+def _group(rows: list[dict], key, top: int = 12, worst: bool = True) -> list[str]:
+    g: dict[str, list[dict]] = {}
+    for t in rows:
+        g.setdefault(str(key(t)), []).append(t)
+    items = sorted(((k, _stats(v)) for k, v in g.items()), key=lambda kv: kv[1]["pnl"], reverse=not worst)
+    return [_line(k, st) for k, st in items[:top]]
+
+
+def autopsy(j: Journal, s: Settings, days: int = 45) -> str:
+    since = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)).isoformat()
+    out: list[str] = [f"AUTOPSY - {s.mode} account, last {days} days", "=" * 60]
+    curve = j.equity_curve(s.mode)
+    if curve:
+        first, last = curve[0], curve[-1]
+        peak = max(r["peak"] or 0 for r in curve)
+        lo = min(r["equity"] for r in curve)
+        out += [f"Equity: first recorded {first['equity']:.0f} ({first['ts'][:10]}), peak seen {peak:.0f}, "
+                f"lowest {lo:.0f}, now {last['equity']:.0f} ({last['ts'][:10]})",
+                f"  change since first record {(last['equity'] / first['equity'] - 1):+.1%}; "
+                f"from peak {(last['equity'] / peak - 1) if peak else 0:+.1%}; "
+                f"worst drawdown the agent itself recorded {max((r['drawdown'] or 0) for r in curve):.1%} "
+                f"(halt limit {s.risk.max_drawdown_halt:.0%})"]
+    else:
+        out.append("No equity history recorded.")
+    ev = j.events(2000, s.mode)
+    halts = [e for e in ev if e["kind"] == "halt"]
+    resumes = [e for e in ev if e["kind"] == "resume"]
+    out.append(f"Halts: {len(halts)}   Resumes by you: {len(resumes)}"
+               + (f"   (last resume {resumes[0]['ts'][:16]})" if resumes else ""))
+    out.append(f"Settings now: risk/trade={s.risk.risk_per_trade:.1%} max open={s.risk.max_open_trades} "
+               f"max open risk={s.risk.max_total_open_risk:.0%} same-group={s.risk.max_same_group} "
+               f"markets={len(s.symbols)}")
+
+    real = [t for t in j.trades("mode = ? AND shadow = 0 AND status = 'closed' AND closed_at >= ?", (s.mode, since), order="closed_at")]
+    shadow = [t for t in j.trades("mode = ? AND shadow = 1 AND status = 'closed' AND closed_at >= ?", (s.mode, since), order="closed_at")]
+    opened = j.open_trades(shadow=False)
+    out += ["", f"REAL TRADES closed: {len(real)}   still open: {len(opened)}   shadow (paper-only): {len(shadow)}"]
+    if not real:
+        return "\n".join(out + ["No closed real trades in this window."])
+    st = _stats(real)
+    out.append(_line("ALL REAL", st))
+    out.append(f"  average win {st['avg_win']:+.2f}R, average loss {st['avg_loss']:+.2f}R "
+               f"(a 3R design needs only ~30% wins; losses worse than -1R mean slippage/gaps)")
+    big = sorted((t for t in real if (t.get("r_multiple") or 0) < -1.5), key=lambda t: t["r_multiple"])[:5]
+    if big:
+        out.append("  losses worse than -1.5R (gaps/slippage/stop moved):")
+        for t in big:
+            out.append(f"    #{t['id']} {t['symbol']} {t['side']} {t['strategy']} {t['r_multiple']:+.1f}R "
+                       f"{(t['decision'] or {}).get('close_reason', '')} {t['closed_at'][:16]}")
+    streak = cur = 0
+    for t in real:
+        cur = cur + 1 if (t.get("r_multiple") or 0) <= 0 else 0
+        streak = max(streak, cur)
+    out.append(f"  longest losing streak: {streak}")
+    cost = []
+    for t in real:
+        sp = (t.get("features") or {}).get("spread")
+        d = abs((t["entry"] or 0) - (t["stop"] or 0))
+        if sp and d:
+            cost.append(float(sp) / d)
+    if cost:
+        out.append(f"  spread cost per trade ~{sum(cost) / len(cost):.2f}R on average (worst {max(cost):.2f}R) - "
+                   f"paid on every entry before price moves")
+    out += ["", "By strategy (worst first):"] + _group(real, lambda t: t["strategy"])
+    out += ["", "Worst markets:"] + _group(real, lambda t: t["symbol"], 10)
+    out += ["", "Best markets:"] + _group(real, lambda t: t["symbol"], 5, worst=False)
+    out += ["", "By side:"] + _group(real, lambda t: t["side"])
+    out += ["", "By session:"] + _group(real, lambda t: (t.get("features") or {}).get("session", "?"))
+    out += ["", "By exit:"] + _group(real, lambda t: (t.get("decision") or {}).get("close_reason") or t.get("outcome") or "?")
+    out += ["", "By risk % taken:"] + _group(real, lambda t: f"{(t.get('risk_pct') or 0):.1%}")
+    out += ["", "By weekday (0=Mon):"] + _group(real, lambda t: (t.get("features") or {}).get("weekday", "?"))
+    # clusters: days where many trades lost together (correlated exposure)
+    days_: dict[str, list[dict]] = {}
+    for t in real:
+        days_.setdefault(t["closed_at"][:10], []).append(t)
+    bad = sorted(((d, sum(float(x["pnl"] or 0) for x in v), len(v)) for d, v in days_.items()), key=lambda x: x[1])[:5]
+    out += ["", "Worst days (money lost in one day, trades closed):"]
+    out += [f"  {d}  {p:+.0f}  ({n} trades)" for d, p, n in bad]
+    if shadow:
+        out += ["", "SHADOW (paper) vs REAL by strategy - does the paper edge exist for real?"]
+        names = sorted({t["strategy"] for t in real} | {t["strategy"] for t in shadow})
+        for n in names[:15]:
+            r_ = _stats([t for t in real if t["strategy"] == n])
+            s_ = _stats([t for t in shadow if t["strategy"] == n])
+            out.append(f"  {n[:22]:<22} real n={r_['n']:<3} avgR={r_['avg_r']:+.2f} | shadow n={s_['n']:<4} avgR={s_['avg_r']:+.2f}")
+    return "\n".join(out)
