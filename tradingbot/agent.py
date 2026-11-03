@@ -11,6 +11,7 @@ import pandas as pd
 
 from . import postmortem as pm
 from .analysis.context import MarketContext
+from . import alignment
 from . import plan as weekly
 from . import protect
 from .analysis import htf
@@ -65,6 +66,7 @@ class Agent:
         self._started = pd.Timestamp.now(tz="UTC")
         self._htf_cache: dict[str, tuple[str, dict]] = {}
         self._rot = 0                         # where the last cycle stopped (fair rotation over many markets)
+        self._dir: dict[str, tuple[int, pd.Timestamp]] = {}   # each market's trend direction (+1 up / -1 down / 0)
         self._plan_retry: dict[str, pd.Timestamp] = {}   # markets that couldn't be planned yet (no data): try later
         # The strategy library: built-ins plus anything in my_strategies/ (minus disabled ones).
         self.core: list[Strategy] = load_library(settings.db_path.parent, journal=journal)
@@ -184,6 +186,8 @@ class Agent:
             ctx = MarketContext(symbol, df, spread=spread, news=self._news_state(symbol, now_ts),
                                 earnings=self._earnings_state(symbol, now_ts), htf=self._htf_frames(symbol, df))
             self._check_plan(symbol, ctx, now_ts)
+            if ctx.htf:
+                self._dir[symbol] = (htf.structure_dir(ctx.htf), now_ts)
             c = df["close"]
             self._snap[symbol] = {"price": float(c.iloc[-1]), "trend": ctx.trend,
                                   "chg_1d": float(c.iloc[-1] / c.iloc[-min(len(c), 96)] * 100 - 100),
@@ -315,6 +319,23 @@ class Agent:
             book["briefing_asked"] = True
             self.j.set(self._plan_key, book)
             self.desk.weekly_briefing(book["week"], now)
+
+    # --- markets that move together --------------------------------------------------------
+    def _group_dirs(self) -> dict[str, int]:
+        """Each market's trend direction: the live read if recent, otherwise this week's plan."""
+        now = pd.Timestamp(self.now())
+        out = {s: d for s, (d, t) in self._dir.items() if now - t <= pd.Timedelta(hours=72)}
+        for s, p in ((self.j.get(self._plan_key) or {}).get("markets") or {}).items():
+            if s not in out and p.get("status") == "active":
+                out[s] = {"buy": 1, "sell": -1}.get(p.get("direction"), 0)
+        return out
+
+    @staticmethod
+    def _open_sides(open_real: list[dict]) -> dict[str, list[str]]:
+        out: dict[str, list[str]] = {}
+        for t in open_real:
+            out.setdefault(t["symbol"], []).append(t["side"])
+        return out
 
     # --- news handling -------------------------------------------------------------------
     def _flatten_for_news(self, now: pd.Timestamp) -> None:
@@ -661,6 +682,8 @@ class Agent:
             sig.features["news_agree"] = "none" if not nd else ("with" if (nd > 0) == (sig.side == "buy") else "against")
             sig.features.update(htf.features(ctx.htf, sig.side, float(ctx.bar["low"]), float(ctx.bar["high"]),
                                              sig.entry, sig.stop))
+            req = alignment.requirement(ctx.symbol, self._group_dirs(), self._open_sides(self.j.open_trades(shadow=False)))
+            sig.features["group_rule"] = ("none" if req is None else req[1])
             found = cdl.detect(ctx.df, ctx.atr.to_numpy(), lookback=2)
             mine, other = cdl.best(found, sig.side), cdl.best(found, "sell" if sig.side == "buy" else "buy", 2)
             sig.features["candle"] = mine["type"] if mine else "none"
@@ -698,7 +721,7 @@ class Agent:
                     f = sig.features
                     why.append(f"checked before entry: trend {f.get('htf_structure', '?')} ({f.get('htf_align', '?')} it), "
                                f"weekly plan {f.get('plan_agree', '?')}, move {f.get('extended', '?')}, "
-                               f"news {f.get('news_agree', '?')}, 15m candle {f.get('candle', 'none')}, "
+                               f"group {f.get('group_rule', 'none')}, news {f.get('news_agree', '?')}, 15m candle {f.get('candle', 'none')}, "
                                f"higher-timeframe candle {f.get('htf_candle', 'none')}")
             dec = {"action": action, "p": round(decision.p, 3), "expected_r": round(decision.expected_r, 3),
                    "stat_key": decision.stat_key, "why": why}
@@ -735,6 +758,10 @@ class Agent:
                 return "higher-timeframe analysis not available for this market yet"
         if self.s.plan_filter:
             why = weekly.against(self.plan_for(sig.symbol), sig.side, f)
+            if why:
+                return why
+        if self.s.alignment_filter:
+            why = alignment.check(sig.symbol, sig.side, self._group_dirs(), self._open_sides(open_real))
             if why:
                 return why
         if self.s.extension_filter and f.get("extended") == "exhausted":

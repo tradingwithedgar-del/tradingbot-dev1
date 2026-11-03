@@ -193,6 +193,9 @@ class Settings:
     plan_filter: bool = field(default_factory=lambda: os.getenv("PLAN_FILTER", "1") not in {"0", "false", "no", "NO"})
     # Move the stop to break-even / small locked profits as a trade works (PROFIT_PROTECTION=0 turns it off).
     profit_protection: bool = field(default_factory=lambda: os.getenv("PROFIT_PROTECTION", "1") not in {"0", "false", "no", "NO"})
+    # Markets that move together trade together: crypto follows BTC, indices and stocks follow their group
+    # (ALIGNMENT=0 turns it off).
+    alignment_filter: bool = field(default_factory=lambda: os.getenv("ALIGNMENT", "1") not in {"0", "false", "no", "NO"})
     extension_filter: bool = field(default_factory=lambda: os.getenv("EXTENSION_FILTER", "1") not in {"0", "false", "no", "NO"})
     history_bars: int = 400
     poll_seconds: int = 20

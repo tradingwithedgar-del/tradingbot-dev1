@@ -11,6 +11,8 @@ from .learning import CANDIDATE
 
 # How a shadow decision's last reason maps to a human explanation.
 REASON_GROUPS = [
+    ("against its group", "against the market group it moves with (BTC for crypto, the index group for indices/stocks)"),
+    ("waiting: ", "waiting for the market leader (BTC) to pick a direction"),
     ("against this week's plan", "against the weekly plan for that market"),
     ("chasing an exhausted move", "the move was already stretched (long 4H streak / far from average) - didn't chase"),
     ("against the higher timeframes", "against the higher-timeframe trend, no confirmed 4H/Daily reversal yet"),

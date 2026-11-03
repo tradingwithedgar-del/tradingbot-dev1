@@ -122,6 +122,11 @@ Every time a bar closes, for each symbol the agent:
   15m, 1H, 4H and Daily candles. The `candle_reversal` strategy trades them only at a higher-timeframe or fresh
   zone after a move into it; weak patterns wait for a confirmation candle. Every trade records which pattern it
   had, so TIIM learns which ones pay on which market. Strong patterns are drawn on the chart.
+* **Markets that move together trade together.** BTCUSD leads crypto: every other coin only trades the way BTC is
+  going (its open trade, else its higher-timeframe trend) and waits until BTC has a direction. US indices (US30,
+  US500, USTECH, RUSS2000), European indices and Asia-Pacific indices each trade as a group, and US stocks follow
+  the indices of their industry (tech: USTECH/US500, financials: Dow/S&P, energy: oil/S&P, ...). Two thirds of a
+  group going one way blocks the opposite. `ALIGNMENT=0` turns it off. See `alignment.py` to change the groups.
 * **Profit protection.** Once a trade is in profit the stop only ever moves toward profit: break-even plus costs
   at about +1R, then small locked profits (+0.5R at 1.5R, +1R at 2R) or behind the latest swing the trade made.
   The original stop stays on record for measuring R. TIIM learns per strategy how patient to be (it waits longer
