@@ -244,13 +244,14 @@ class Settings:
 
     @property
     def proven_only(self) -> bool:
-        """No experiments: no tweaked variants, bred strategies or Strategy Lab; real money only on evidence."""
+        """Testing stays virtual; real trades only for strategies with a positive track record."""
         return os.getenv("PROVEN_ONLY", "1") not in {"0", "false", "no", "NO"}
 
     @property
     def experiments_allowed(self) -> bool:
-        # Indicator experiments are only ever allowed off the live account, and never in proven-only mode.
-        return not self.is_live and not self.proven_only
+        # Indicator experiments are only ever allowed off the live account. In proven-only mode they run
+        # virtually: the learner never gives them real size until they have a positive record.
+        return not self.is_live
 
     @property
     def stop_file(self) -> Path:

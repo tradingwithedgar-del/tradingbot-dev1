@@ -87,7 +87,7 @@ class Agent:
 
     def strategies(self) -> list[Strategy]:
         out = list(self.core)
-        if self.s.mode == "demo" and not self.s.proven_only:
+        if self.s.mode == "demo":
             # each strategy is shadowed by a tweaked variant; the better version wins over time
             out += [c for c in (self.learner.challenger_for(st) for st in self.core) if c is not None]
         if self.s.experiments_allowed:
