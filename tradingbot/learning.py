@@ -215,9 +215,11 @@ class Learner:
         if regime_key in self.stats and self.stats[regime_key].count >= 8:
             key = regime_key
         st = self.stat(key)
-        if self.live:
+        if self.live or self.cfg.proven_only:
+            if not self.live and st.count < self.cfg.proven_min_trades:
+                return Decision("shadow", 0, 0, key, [f"not proven yet: {st.count}/{self.cfg.proven_min_trades} results (virtual only)"])
             p = st.p_quantile(self.cfg, -0.5)   # cautious with real money
-            reasons.append("live: conservative win-rate estimate")
+            reasons.append("conservative win-rate estimate" + (" (proven-only mode)" if not self.live else ""))
         else:
             a, b = st.p_params(self.cfg)
             p = self.rng.betavariate(a, b)      # explore on demo

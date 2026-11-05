@@ -12,3 +12,8 @@ _PREFIXES = ("TL_", "NEWS_", "DESK_", "LAB_", "BOT_", "AGENT_", "MAX_", "RISK_",
 for _k in list(os.environ):
     if _k.startswith(_PREFIXES):
         del os.environ[_k]
+
+# The older tests exercise the exploring (non-proven) behaviour; test_proven.py switches proven-only on.
+for _k in ("PROVEN_ONLY", "PROVEN_MIN_TRADES", "ALL_MARKETS"):
+    os.environ.pop(_k, None)
+os.environ["PROVEN_ONLY"] = "0"

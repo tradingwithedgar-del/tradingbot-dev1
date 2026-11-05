@@ -92,6 +92,8 @@ class LearningConfig:
     decay: float = 0.97                 # older trades fade so the agent tracks a changing market
     prior_wins: float = 1.0             # weak Beta prior centred near breakeven for 3R (25%)
     prior_losses: float = 3.0
+    proven_only: bool = field(default_factory=lambda: os.getenv("PROVEN_ONLY", "1") not in {"0", "false", "no", "NO"})
+    proven_min_trades: int = field(default_factory=lambda: _env_int("PROVEN_MIN_TRADES", 10))
     min_expected_r: float = 0.0         # only take signals with positive expected R
     filter_min_samples: int = 12        # evidence needed before a condition is blocked
     filter_max_expectancy: float = -0.25  # block a (strategy, condition) when expectancy is below this
@@ -241,9 +243,14 @@ class Settings:
         return self.mode == "live"
 
     @property
+    def proven_only(self) -> bool:
+        """No experiments: no tweaked variants, bred strategies or Strategy Lab; real money only on evidence."""
+        return os.getenv("PROVEN_ONLY", "1") not in {"0", "false", "no", "NO"}
+
+    @property
     def experiments_allowed(self) -> bool:
-        # Indicator experiments are only ever allowed off the live account.
-        return not self.is_live
+        # Indicator experiments are only ever allowed off the live account, and never in proven-only mode.
+        return not self.is_live and not self.proven_only
 
     @property
     def stop_file(self) -> Path:

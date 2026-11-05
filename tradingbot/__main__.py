@@ -29,10 +29,17 @@ def resolve_symbols(broker, s) -> None:
     """BOT_SYMBOLS=ALL means every instrument on the account (minus BOT_EXCLUDE)."""
     import os
 
+    from .news.assets import tradeable
+
     if [x.upper() for x in s.symbols] == ["ALL"]:
         skip = {x.strip() for x in os.getenv("BOT_EXCLUDE", "").split(",") if x.strip()}
         s.symbols = [n for n in broker.instrument_names() if n not in skip]
-        logging.info("Trading every instrument on the account: %d markets", len(s.symbols))
+        logging.info("Every instrument on the account: %d markets", len(s.symbols))
+    if os.getenv("ALL_MARKETS", "0") in {"0", "false", "no", "NO", ""}:
+        kept = [n for n in s.symbols if tradeable(n)]
+        if len(kept) != len(s.symbols):
+            logging.info("Trading only stocks, indices, commodities, BTC and ETH: %d of %d markets", len(kept), len(s.symbols))
+        s.symbols = kept
 
 
 def _require_symbols(broker, symbols: list[str]) -> None:

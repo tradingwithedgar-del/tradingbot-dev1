@@ -27,6 +27,17 @@ def asset_class(symbol: str) -> str:
     return "stock"
 
 
+TRADEABLE_CLASSES = {"stock", "index", "gold", "metal", "oil", "gas"}   # + BTC and ETH
+
+
+def tradeable(symbol: str) -> bool:
+    """Stocks, indices, commodities (gold, metals, oil, gas) and only BTC and ETH among crypto."""
+    cls = asset_class(symbol)
+    if cls == "crypto":
+        return symbol.upper().startswith(("BTC", "ETH"))
+    return cls in TRADEABLE_CLASSES
+
+
 US_INDICES = {"US30", "US500", "USTECH", "RUSS2000", "NAS100", "US100", "SPX500"}
 
 
